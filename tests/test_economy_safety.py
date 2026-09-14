@@ -135,3 +135,16 @@ class EconomySafetyTests(unittest.TestCase):
         raw["teamOur"]["teamId"] = "other"
         app.handle_turn(raw)
         self.assertEqual(app.engine.rules.round_origin, 1)
+
+    def test_malformed_actions_are_isolated_before_joint_search(self):
+        malformed = (Action("10010", "move", (None,)), Action("10010", "move", (Pos(True, 5),)),
+                     Action("10010", "sell", name="copper", amount="one"),
+                     Action("10010", "move", (Pos(3, 5),), answer="unexpected"))
+        state = world()
+        for action in malformed:
+            with self.subTest(action=action):
+                with self.assertRaises(InvalidAction):
+                    ActionCompiler(RuleProfile()).validate(state, (action,))
+                candidate = Candidate("bad", "test", frozenset({"10010"}), (action,), Value(readiness=100), "bad")
+                plan = PlanArbiter(ActionCompiler(RuleProfile())).choose(state, (candidate,), previous={}, deadline=time.monotonic() + 1)
+                self.assertEqual(plan.actions, ())

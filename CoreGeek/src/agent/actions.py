@@ -47,6 +47,24 @@ class Action:
         return result
 
 
+def structured_action(action: object) -> bool:
+    if not isinstance(action, Action):
+        return False
+    if not all(isinstance(value, str) for value in (action.actor_id, action.kind, action.name, action.weapon_id, action.answer)):
+        return False
+    if not action.actor_id or not isinstance(action.targets, tuple) or type(action.amount) is not int:
+        return False
+    if not all(isinstance(pos, Pos) and type(pos.x) is int and type(pos.y) is int for pos in action.targets):
+        return False
+    if not isinstance(action.items, tuple) or not all(isinstance(item, str) for item in action.items):
+        return False
+    return (not action.name or action.kind in {"build", "use", "buy", "sell", "drop"}) and (
+        not action.weapon_id or action.kind == "attack") and (
+        not action.answer or action.kind == "submitAnswer") and (
+        not action.items or action.kind == "summonTreasure") and (
+        not action.targets or action.kind in {"move", "collect", "build", "remove", "attack", "use", "summonTreasure"})
+
+
 def weapon_range(weapon: Unit) -> int | None:
     if weapon.attack_range is not None:
         return weapon.attack_range if weapon.attack_range >= 0 else None
@@ -72,6 +90,8 @@ class ActionCompiler:
         return response
 
     def validate(self, world: World, actions: tuple[Action, ...]) -> None:
+        if not isinstance(actions, tuple) or not all(structured_action(action) for action in actions):
+            raise InvalidAction("malformed action description")
         if actions and world.observation.round_no < self.rules.round_origin:
             raise InvalidAction("round precedes configured origin")
         actors = {unit.id: unit for unit in world.actors}

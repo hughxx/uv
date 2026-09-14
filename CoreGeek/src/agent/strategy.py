@@ -59,11 +59,13 @@ def objective_observed(run: PlaybookRun, world: World) -> bool:
 
 
 class StrategyEngine:
-    def __init__(self, *, library: PlaybookLibrary | None = None, rules: RuleProfile | None = None, budget_seconds: float = 2.5) -> None:
+    def __init__(self, *, library: PlaybookLibrary | None = None, rules: RuleProfile | None = None, budget_seconds: float = 2.5,
+                 task_max_requests: int = 12, tool_wait_rounds: int = 3) -> None:
         self.library = library if library is not None else default_library()
         self.rules = rules if rules is not None else RuleProfile()
         self.configured_rules = self.rules
         self.budget_seconds = budget_seconds
+        self.task_max_requests, self.tool_wait_rounds = task_max_requests, tool_wait_rounds
         self.runs: tuple[PlaybookRun, ...] = ()
         self.last_decision: Decision | None = None
         self.task_state: TaskState | None = None
@@ -84,7 +86,8 @@ class StrategyEngine:
         if len(filtered) != len(candidates):
             diagnostics += (f"execution-cooldown:{len(candidates) - len(filtered)}",)
         candidates = filtered
-        task_work = prepare_task(world, None if reset else self.task_state)
+        task_work = prepare_task(world, None if reset else self.task_state,
+                                 max_requests=self.task_max_requests, timeout_rounds=self.tool_wait_rounds)
         if task_work.candidate is not None:
             candidates += (task_work.candidate,)
         old = {} if reset else {run.candidate.key: run for run in self.runs}

@@ -7,8 +7,9 @@ import math
 from dataclasses import dataclass
 from typing import Mapping
 
-from .actions import Action, ActionCompiler, InvalidAction
+from .actions import Action, ActionCompiler, InvalidAction, structured_action
 from .forecast import ThreatEnvelope
+from .layout import LayoutGuard
 from .world import Unit, World
 
 
@@ -71,7 +72,7 @@ def valid_candidate(candidate: object) -> bool:
             and type(candidate.reserved_weapon_slots) is int and candidate.reserved_weapon_slots >= 0
             and (candidate.deadline is None or type(candidate.deadline) is int)
             and isinstance(candidate.actions, tuple)
-            and all(isinstance(action, Action) and action.actor_id in candidate.actors for action in candidate.actions)
+            and all(structured_action(action) and action.actor_id in candidate.actors for action in candidate.actions)
             and isinstance(candidate.damage, tuple)
             and all(isinstance(pair, tuple) and len(pair) == 2 and isinstance(pair[0], str)
                     and type(pair[1]) in (int, float) and math.isfinite(pair[1]) and pair[1] >= 0
@@ -119,6 +120,7 @@ class PlanArbiter:
         actor_ids = frozenset(unit.id for unit in world.actors)
         robots = {robot.id: robot for robot in world.robots}
         threat = ThreatEnvelope(world)
+        layout = LayoutGuard(world)
         guard = self.compiler.rules.guard_projected_role_deaths
         losses = lambda actions: threat.projected_losses(actions) if guard else 0
         valid = tuple(candidate for candidate in candidates if valid_candidate(candidate) and candidate.actors <= actor_ids
@@ -161,6 +163,8 @@ class PlanArbiter:
                 try:
                     self.compiler.validate(world, actions)
                 except InvalidAction:
+                    return
+                if self.compiler.rules.preserve_build_access and not layout.preserves_access(actions, deadline):
                     return
                 switching = sum(0.2 for candidate in chosen for actor in candidate.actors if actor in previous and previous[actor] != candidate.key)
                 utility = sum(candidate.value.utility for candidate in chosen) + combat_utility(world, chosen, robots=robots) - switching

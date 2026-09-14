@@ -107,8 +107,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         return
 
 
-def serve(port: int) -> None:
-    with AgentHTTPServer(("0.0.0.0", port)) as server:
+def serve(port: int, application: AgentApplication | None = None) -> None:
+    with AgentHTTPServer(("0.0.0.0", port), application) as server:
         LOGGER.info("listening on 0.0.0.0:%d (baseline strategy)", port)
         try:
             server.serve_forever()

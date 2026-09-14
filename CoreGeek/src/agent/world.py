@@ -101,6 +101,7 @@ class RuleProfile:
     inferred_build_rings: bool = True
     repeated_attack_targets: bool = False
     guard_projected_role_deaths: bool = True
+    preserve_build_access: bool = True
 
     def day(self, round_no: int) -> int:
         return (round_no - self.round_origin) // (self.day_length + self.night_length) + 1

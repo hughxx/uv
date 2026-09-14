@@ -9,9 +9,11 @@ from itertools import combinations
 from typing import Protocol
 
 from .actions import Action, ActionCompiler, InvalidAction, weapon_range
+from .combat import AreaConsumables
 from .economy import InvestUpgrades, RestockMedicine, upgrade_item, upgrade_value
 from .forecast import ThreatEnvelope, full_health
 from .geometry import Route, interaction_cells, shortest_route
+from .layout import FortifyBase
 from .planning import Candidate, Value, valid_candidate
 from .world import MINERALS, Pos, RuleProfile, Unit, World
 
@@ -324,5 +326,5 @@ class EvadeLethalThreat:
 def default_library() -> PlaybookLibrary:
     from .tasks import AcquireTask
 
-    return PlaybookLibrary((EvadeLethalThreat(), UseInventory(), OperateDefense(), BuildDefense(), AcquireTask(),
-                            RestockMedicine(), InvestUpgrades(), CashInventory(), HarvestMinerals()))
+    return PlaybookLibrary((EvadeLethalThreat(), UseInventory(), OperateDefense(), AreaConsumables(), BuildDefense(), AcquireTask(),
+                            RestockMedicine(), InvestUpgrades(), FortifyBase(), CashInventory(), HarvestMinerals()))
