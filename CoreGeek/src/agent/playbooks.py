@@ -279,4 +279,6 @@ class UseInventory:
 
 
 def default_library() -> PlaybookLibrary:
-    return PlaybookLibrary((UseInventory(), OperateDefense(), BuildDefense(), CashInventory(), HarvestMinerals()))
+    from .tasks import AcquireTask
+
+    return PlaybookLibrary((UseInventory(), OperateDefense(), BuildDefense(), AcquireTask(), CashInventory(), HarvestMinerals()))
