@@ -44,6 +44,15 @@ class Context:
                 return None
             blocked = self.world.blockers(exclude_actors=frozenset({actor.id}))
             self.routes[key] = shortest_route(self.world, start, interaction_cells(self.world, targets, blocked), blocked, deadline=self.deadline)
+            if self.routes[key] is None and not self.expired and self.rules.joint_follow_moves:
+                # A narrow post may be blocked only by a teammate who can
+                # leave in this same joint plan. Offer the conditional route;
+                # the compiler accepts its first step ONLY if that teammate
+                # actually has a compatible move in the selected plan.
+                cooperative = self.world.blockers(exclude_actors=frozenset(unit.id for unit in self.world.actors))
+                if cooperative != blocked:
+                    self.routes[key] = shortest_route(self.world, start, interaction_cells(self.world, targets, cooperative),
+                                                       cooperative, deadline=self.deadline)
         return self.routes[key]
 
     def risk(self, pos: Pos) -> float:
@@ -100,10 +109,6 @@ class CashInventory:
         world = context.world
         proposals = []
         for actor in world.actors:
-            if not context.rules.daytime(world.observation.round_no) and any(actor.pos.distance(weapon.pos) == 1 for weapon in world.weapons):
-                if any(robot.alive and robot.target_team in {None, world.side} and world.station
-                       and min(robot.pos.distance(cell) for cell in world.station.cells) <= 6 for robot in world.robots):
-                    continue
             for name, amount in Counter(actor.backpack or ()).items():
                 if name not in MINERALS or name not in world.sale_prices or context.expired:
                     continue

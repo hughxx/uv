@@ -27,6 +27,7 @@ def decision_report(application: AgentApplication) -> dict[str, Any]:
         "rules": asdict(decision.rules), "candidateCount": decision.candidate_count,
         "search": {"visited": plan.visited, "exhausted": plan.exhausted},
         "utilityEstimate": plan.utility, "projectedRoleLosses": plan.projected_role_losses,
+        "threatenedPostsLost": plan.threatened_posts_lost,
         "actualNetGoldDelta": decision.observed_gold_delta,
         "failedPreviousActions": sorted(str(key) for key, value in action_results.items() if value is False) if isinstance(action_results, dict) else [],
         "errorCodes": [error["errorCode"] for error in errors if isinstance(error, dict) and type(error.get("errorCode")) is int] if isinstance(errors, list) else [],
@@ -41,6 +42,8 @@ def decision_report(application: AgentApplication) -> dict[str, Any]:
                       "valueEstimate": asdict(candidate.value), "reservedGold": candidate.reserved_gold,
                       "actions": [{"actor": action.actor_id, "kind": action.kind,
                                    "targets": [target.payload() for target in action.targets],
+                                   "requiresVacating": [actor.id for actor in world.actors if action.kind == "move"
+                                                        and actor.id != action.actor_id and actor.pos in action.targets],
                                    "item": action.name, "weapon": action.weapon_id} for action in candidate.actions]}
                      for candidate in plan.candidates],
         "tools": {"promptPresent": bool(decision.response["prompt"]), "commandPresent": bool(decision.response["executeCmd"]),

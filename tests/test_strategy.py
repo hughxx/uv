@@ -54,7 +54,7 @@ class StrategyTests(unittest.TestCase):
         else:
             self.fail("cash playbook did not reach a sale")
 
-    def test_new_threat_invalidates_cash_plan_and_hands_over_to_defense(self):
+    def test_new_threat_replaces_cash_plan_and_hands_over_to_defense(self):
         app = AgentApplication(StrategyEngine(library=PlaybookLibrary((CashInventory(), OperateDefense()))))
         roles = [unit(backpack=["copper"] * 20), unit(10013, "station", (5, 6)), unit(10030, "railgun", (4, 6))]
         raw = packet(roles, round_no=71, robots=[unit(30001, "smallRobot", (4, 13), health=40)],
@@ -67,7 +67,7 @@ class StrategyTests(unittest.TestCase):
         updated["robot"]["roles"][0]["pos"] = {"x": 4, "y": 12}
         response = app.handle_turn(updated)
         self.assertEqual(response["roleCommandMap"]["10030"]["action"], "attack")
-        self.assertTrue(any(transition.key.startswith("cash:") and transition.kind == "premise-invalidated"
+        self.assertTrue(any(transition.key.startswith("cash:") and transition.kind == "replaced"
                             for transition in app.engine.last_decision.transitions))
         self.assertEqual(updated["teamOur"]["roles"][0]["backpack"], ["copper"] * 20)
 

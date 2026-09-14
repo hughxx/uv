@@ -168,6 +168,32 @@ class PackageTests(unittest.TestCase):
                 self.assertEqual(json.loads(response.read()), {"roleCommandMap": {}, "prompt": "", "executeCmd": ""})
             finally:
                 connection.close()
+            def post(payload):
+                client = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+                try:
+                    client.request("POST", "/turn", json.dumps(payload), {"Content-Type": "application/json"})
+                    reply = client.getresponse()
+                    self.assertEqual(reply.status, 200)
+                    return json.loads(reply.read())
+                finally:
+                    client.close()
+
+            # Exercise the actual artifact's strategy and state, not just an
+            # idle transport probe. No Demo or local package installation.
+            from agent.application import AgentApplication
+            from tests.helpers import packet, unit
+            sample_path = Path(__file__).resolve().parents[1] / "docs" / "request.txt"
+            sample = json.loads(sample_path.read_text(encoding="utf-8-sig"))
+            expected = AgentApplication().handle_turn(sample)
+            self.assertTrue(expected["roleCommandMap"])
+            self.assertEqual(post(sample), expected)
+            self.assertEqual(post(sample), expected)
+
+            task = packet([unit(10011, "pioneer", health=200)], phaseTask="Synthetic archive task: return 42.")
+            task_reply = post(task)
+            token = json.loads(task_reply["prompt"])["requestId"]
+            task.update(roundNo=2, llmResp=json.dumps({"requestId": token, "kind": "answer", "answer": "42"}))
+            self.assertEqual(post(task)["roleCommandMap"]["10011"], {"action": "submitAnswer", "taskAnswer": "42"})
         finally:
             if shell and os.name == "nt" and process.poll() is None:
                 # Git Bash may retain a wrapper process on Windows. Stop only
