@@ -1,0 +1,25 @@
+# Python local environments and generated files
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# Local runtime state and credentials
+.local/
+logs/
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db

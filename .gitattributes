@@ -1,0 +1,13 @@
+* text=auto
+.gitattributes text eol=lf
+.gitignore text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+*.toml text eol=lf
+*.sh text eol=lf
+
+# Keep supplied reference material byte-for-byte reproducible.
+Demo/** -text
+docs/*.txt -text
+docs/任务书.md -text
+docs/接口文档.md -text
