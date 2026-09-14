@@ -109,7 +109,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
 def serve(port: int) -> None:
     with AgentHTTPServer(("0.0.0.0", port)) as server:
-        LOGGER.info("listening on 0.0.0.0:%d (idle baseline)", port)
+        LOGGER.info("listening on 0.0.0.0:%d (baseline strategy)", port)
         try:
             server.serve_forever()
         except KeyboardInterrupt:

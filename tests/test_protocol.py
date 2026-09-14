@@ -42,11 +42,13 @@ class ProtocolTests(unittest.TestCase):
             with self.subTest(payload=payload), self.assertRaises(InvalidObservation):
                 Observation.from_payload(payload)
 
-    def test_official_request_and_repeat_are_idle(self) -> None:
+    def test_official_request_has_complete_idempotent_response(self) -> None:
         payload = json.loads((ROOT / "docs" / "request.txt").read_text(encoding="utf-8-sig"))
         application = AgentApplication()
-        self.assertEqual(application.handle_turn(payload), idle_response())
-        self.assertEqual(application.handle_turn(payload), idle_response())
+        response = application.handle_turn(payload)
+        self.assertEqual(set(response), {"roleCommandMap", "prompt", "executeCmd"})
+        self.assertEqual(application.handle_turn(payload), response)
+        self.assertEqual(application.memory.revision, 1)
 
 
 if __name__ == "__main__":

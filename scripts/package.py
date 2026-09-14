@@ -118,7 +118,7 @@ def main() -> None:
     except (OSError, ValueError, UnicodeError) as error:
         parser.exit(1, f"Packaging failed: {error}\n")
     print(f"Created: {output}")
-    print("Runtime: CoreGeek/run.sh <port>; strategy: idle baseline (not competition-ready).")
+    print("Runtime: CoreGeek/run.sh <port>; baseline strategy, platform validation still required.")
 
 
 if __name__ == "__main__":
