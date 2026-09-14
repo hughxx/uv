@@ -42,8 +42,20 @@ class TurnMemory:
         self.events: tuple[Event, ...] = ()
         self.revision = 0
 
+    def resolve_identity(self, observation: Observation) -> tuple[str, str, str]:
+        current = identity(observation)
+        # A destroyed station may disappear from roles. Its absence is not a
+        # new match, and must not discard task history or retire this side.
+        if self.session is not None and current[:2] == self.session[:2] and current[2] == "[]":
+            return self.session
+        if current[2] == "[]":
+            retired = sorted(session for session in self.retired_sessions if session[:2] == current[:2])
+            if retired:
+                return retired[-1]
+        return current
+
     def lookup(self, observation: Observation) -> tuple[str, dict[str, Any] | None]:
-        session = identity(observation)
+        session = self.resolve_identity(observation)
         if session in self.retired_sessions:
             return "stale_session", None
         if self.session is not None and session != self.session:
@@ -71,7 +83,7 @@ class TurnMemory:
     def commit(self, observation: Observation, response: dict[str, Any]) -> None:
         encoded = encode_response(response)
         frozen = Observation.from_payload(json.loads(json.dumps(observation.raw, allow_nan=False)))
-        session = identity(frozen)
+        session = self.resolve_identity(frozen)
         reset = self.session is not None and session != self.session
         events = self.changes(frozen, reset=reset)
         if reset:

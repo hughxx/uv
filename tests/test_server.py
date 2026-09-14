@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "CoreGeek" / "src")
 from agent.application import AgentApplication
 from agent.protocol import idle_response
 from agent.server import AgentHTTPServer, MAX_REQUEST_BYTES
+from tests.helpers import packet
 
 
 class HTTPTests(unittest.TestCase):
@@ -67,7 +68,7 @@ class HTTPTests(unittest.TestCase):
 
         self.server.application = FailingApplication()
         with self.assertLogs("agent.server", level="ERROR") as captured:
-            self.assertEqual(self.request(b'{"roundNo": 1}'), (200, idle_response()))
+            self.assertEqual(self.request(json.dumps(packet()).encode()), (200, idle_response()))
         self.assertNotIn("not logged", " ".join(captured.output))
 
     def test_busy_application_has_bounded_wait(self) -> None:
@@ -85,7 +86,7 @@ class HTTPTests(unittest.TestCase):
 
             self.server.application = InvalidApplication()
             with self.subTest(response=bad_response), self.assertLogs("agent.server", level="ERROR"):
-                self.assertEqual(self.request(b'{"roundNo": 1}'), (200, idle_response()))
+                self.assertEqual(self.request(json.dumps(packet()).encode()), (200, idle_response()))
 
 
 if __name__ == "__main__":

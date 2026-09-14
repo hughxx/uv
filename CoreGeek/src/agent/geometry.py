@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import time
 
 from .world import Pos, World
 
@@ -25,7 +26,7 @@ def interaction_cells(world: World, targets: frozenset[Pos], blocked: frozenset[
     return frozenset(pos for target in targets for pos in target.neighbors() if world.inside(pos) and pos not in blocked)
 
 
-def shortest_route(world: World, start: Pos, goals: frozenset[Pos], blocked: frozenset[Pos]) -> Route | None:
+def shortest_route(world: World, start: Pos, goals: frozenset[Pos], blocked: frozenset[Pos], *, deadline: float | None = None) -> Route | None:
     if not world.inside(start):
         return None
     goals = frozenset(goal for goal in goals if world.inside(goal) and (goal not in blocked or goal == start))
@@ -36,6 +37,8 @@ def shortest_route(world: World, start: Pos, goals: frozenset[Pos], blocked: fro
     previous: dict[Pos, Pos | None] = {start: None}
     frontier = deque([start])
     while frontier:
+        if deadline is not None and time.monotonic() >= deadline:
+            return None
         current = frontier.popleft()
         for neighbor in current.neighbors():
             if not world.inside(neighbor) or neighbor in blocked or neighbor in previous:

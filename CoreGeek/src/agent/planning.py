@@ -9,7 +9,7 @@ from typing import Mapping
 
 from .actions import Action, ActionCompiler, InvalidAction
 from .forecast import ThreatEnvelope
-from .world import World
+from .world import Unit, World
 
 
 @dataclass(frozen=True)
@@ -86,19 +86,24 @@ def gold_commitment(world: World, candidate: Candidate, compiler: ActionCompiler
     return max(candidate.reserved_gold, immediate)
 
 
-def combat_utility(world: World, candidates: tuple[Candidate, ...]) -> float:
+def combat_utility(world: World, candidates: tuple[Candidate, ...], *, robots: Mapping[str, Unit] | None = None) -> float:
     combined: dict[str, float] = {}
     for candidate in candidates:
         for robot_id, damage in candidate.damage:
             combined[robot_id] = combined.get(robot_id, 0) + damage
     score = 0.0
+    if not combined:
+        return score
+    robots = robots if robots is not None else {robot.id: robot for robot in world.robots}
+    station = world.station
     rewards = {"smallRobot": 1, "middleRobot": 2, "largeRobot": 4, "bossRobot": 10}
-    for robot in world.robots:
-        if not robot.alive:
+    for robot_id, predicted_damage in combined.items():
+        robot = robots.get(robot_id)
+        if robot is None or not robot.alive:
             continue
-        damage = min(robot.health, combined.get(robot.id, 0))
+        damage = min(robot.health, predicted_damage)
         threat = 1.0
-        if world.station and robot.pos.distance(world.station.pos) <= 5:
+        if station and min(robot.pos.distance(cell) for cell in station.cells) <= 5:
             threat = 2.0
         score += damage * 0.2 * threat
         if damage >= robot.health:
@@ -112,6 +117,7 @@ class PlanArbiter:
 
     def choose(self, world: World, candidates: tuple[Candidate, ...], *, previous: Mapping[str, str], deadline: float) -> Plan:
         actor_ids = frozenset(unit.id for unit in world.actors)
+        robots = {robot.id: robot for robot in world.robots}
         threat = ThreatEnvelope(world)
         guard = self.compiler.rules.guard_projected_role_deaths
         losses = lambda actions: threat.projected_losses(actions) if guard else 0
@@ -120,7 +126,7 @@ class PlanArbiter:
         options: dict[str, list[Candidate]] = {}
         for actor_id in actor_ids:
             ranked = sorted((candidate for candidate in valid if actor_id in candidate.actors),
-                            key=lambda c: (losses(c.actions), -(c.value.utility + combat_utility(world, (c,))), c.key))
+                            key=lambda c: (losses(c.actions), -(c.value.utility + combat_utility(world, (c,), robots=robots)), c.key))
             # Keep goal/resource diversity before filling alternate shot choices;
             # otherwise one weapon's many targets crowd every other weapon out.
             seen: set[str] = set()
@@ -157,7 +163,7 @@ class PlanArbiter:
                 except InvalidAction:
                     return
                 switching = sum(0.2 for candidate in chosen for actor in candidate.actors if actor in previous and previous[actor] != candidate.key)
-                utility = sum(candidate.value.utility for candidate in chosen) + combat_utility(world, chosen) - switching
+                utility = sum(candidate.value.utility for candidate in chosen) + combat_utility(world, chosen, robots=robots) - switching
                 projected = losses(actions)
                 if (projected, -utility) < (best_losses, -best_value):
                     best, best_value, best_losses = chosen, utility, projected

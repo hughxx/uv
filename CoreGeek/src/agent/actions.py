@@ -80,7 +80,7 @@ class ActionCompiler:
         if len({action.key for action in actions}) != len(actions):
             raise InvalidAction("command key used more than once")
         moving = frozenset(action.actor_id for action in actions if action.kind == "move")
-        blocked = world.blockers(exclude_actors=moving)
+        blocked = world.blockers(exclude_actors=moving) if moving else frozenset()
         destinations: set[Pos] = set()
         edges: set[tuple[Pos, Pos]] = set()
         builds: set[Pos] = set()

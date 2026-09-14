@@ -41,7 +41,7 @@ class Context:
             if self.expired:
                 return None
             blocked = self.world.blockers(exclude_actors=frozenset({actor.id}))
-            self.routes[key] = shortest_route(self.world, start, interaction_cells(self.world, targets, blocked), blocked)
+            self.routes[key] = shortest_route(self.world, start, interaction_cells(self.world, targets, blocked), blocked, deadline=self.deadline)
         return self.routes[key]
 
     def risk(self, pos: Pos) -> float:

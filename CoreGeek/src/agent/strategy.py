@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from .actions import ActionCompiler
+from .feedback import FailedAttempt, cooling_down, reconcile_failures
 from .planning import Candidate, Plan, PlanArbiter
 from .playbooks import Context, PlaybookLibrary, default_library
 from .tasks import TaskState, after_selection, prepare_task
@@ -40,6 +41,7 @@ class Decision:
     candidate_count: int
     observed_gold_delta: int | None
     task_state: TaskState | None = None
+    failures: tuple[FailedAttempt, ...] = ()
 
 
 def objective_observed(run: PlaybookRun, world: World) -> bool:
@@ -65,6 +67,7 @@ class StrategyEngine:
         self.runs: tuple[PlaybookRun, ...] = ()
         self.last_decision: Decision | None = None
         self.task_state: TaskState | None = None
+        self.failures: tuple[FailedAttempt, ...] = ()
 
     def propose(self, world: World, *, reset: bool = False) -> Decision:
         deadline = time.monotonic() + self.budget_seconds
@@ -74,6 +77,13 @@ class StrategyEngine:
         compiler = ActionCompiler(rules)
         context = Context(world, rules, deadline - min(0.3, self.budget_seconds / 3))
         candidates, diagnostics = self.library.propose(context)
+        last = None if reset else self.last_decision
+        failures = reconcile_failures(world, last.world if last else None, last.plan if last else None, self.failures)
+        filtered = tuple(candidate for candidate in candidates
+                         if not any(cooling_down(action, failures, world.observation.round_no) for action in candidate.actions))
+        if len(filtered) != len(candidates):
+            diagnostics += (f"execution-cooldown:{len(candidates) - len(filtered)}",)
+        candidates = filtered
         task_work = prepare_task(world, None if reset else self.task_state)
         if task_work.candidate is not None:
             candidates += (task_work.candidate,)
@@ -98,8 +108,9 @@ class StrategyEngine:
         last_world = self.last_decision.world if self.last_decision and not reset else None
         delta = world.gold - last_world.gold if last_world and last_world.gold is not None and world.gold is not None else None
         return Decision(response, world, rules, plan, tuple(runs), tuple(transitions), diagnostics, len(candidates), delta,
-                        after_selection(task_work, plan.actions, world.observation.round_no))
+                        after_selection(task_work, plan.actions, world.observation.round_no), failures)
 
     def commit(self, decision: Decision) -> None:
         self.rules, self.runs, self.last_decision = decision.rules, decision.runs, decision
         self.task_state = decision.task_state
+        self.failures = decision.failures
