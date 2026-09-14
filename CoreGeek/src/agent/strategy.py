@@ -60,6 +60,7 @@ class StrategyEngine:
     def __init__(self, *, library: PlaybookLibrary | None = None, rules: RuleProfile | None = None, budget_seconds: float = 2.5) -> None:
         self.library = library if library is not None else default_library()
         self.rules = rules if rules is not None else RuleProfile()
+        self.configured_rules = self.rules
         self.budget_seconds = budget_seconds
         self.runs: tuple[PlaybookRun, ...] = ()
         self.last_decision: Decision | None = None
@@ -67,7 +68,7 @@ class StrategyEngine:
 
     def propose(self, world: World, *, reset: bool = False) -> Decision:
         deadline = time.monotonic() + self.budget_seconds
-        rules = self.rules
+        rules = self.configured_rules if reset else self.rules
         if (reset or self.last_decision is None) and world.observation.round_no == 0:
             rules = replace(rules, round_origin=0)
         compiler = ActionCompiler(rules)

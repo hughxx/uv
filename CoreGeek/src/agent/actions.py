@@ -97,8 +97,8 @@ class ActionCompiler:
             if action.kind == "move":
                 if actor.pos.distance(target) != 1 or target in blocked:
                     raise InvalidAction("move is blocked or not one step")
-                if world.phase_task and actor.kind == "pioneer":
-                    raise InvalidAction("active task pins the pioneer until an explicit safe exit")
+                if world.phase_task and actor.kind == "pioneer" and target not in world.task_stay_cells(actor):
+                    raise InvalidAction("move could leave the active task's interaction area")
                 if target in destinations or (target, actor.pos) in edges:
                     raise InvalidAction("move collision or swap")
                 destinations.add(target)

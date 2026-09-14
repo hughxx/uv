@@ -9,8 +9,10 @@ from itertools import combinations
 from typing import Protocol
 
 from .actions import Action, ActionCompiler, InvalidAction, weapon_range
+from .economy import InvestUpgrades, RestockMedicine, upgrade_item, upgrade_value
+from .forecast import ThreatEnvelope, full_health
 from .geometry import Route, interaction_cells, shortest_route
-from .planning import Candidate, Value
+from .planning import Candidate, Value, valid_candidate
 from .world import MINERALS, Pos, RuleProfile, Unit, World
 
 
@@ -68,7 +70,11 @@ class PlaybookLibrary:
                 diagnostics.append(f"budget:{definition.id}")
                 continue
             try:
-                candidates.extend(definition.propose(context))
+                for candidate in definition.propose(context):
+                    if valid_candidate(candidate):
+                        candidates.append(candidate)
+                    else:
+                        diagnostics.append(f"invalid-candidate:{definition.id}")
             except Exception as error:
                 diagnostics.append(f"error:{definition.id}:{type(error).__name__}")
         return tuple(candidates), tuple(diagnostics)
@@ -253,18 +259,19 @@ class UseInventory:
 
     def propose(self, context: Context) -> tuple[Candidate, ...]:
         world = context.world
+        threat = ThreatEnvelope(world)
         proposals = []
         for actor in world.actors:
-            if "Medicine" in (actor.backpack or ()) and actor.health < (110 if actor.kind == "worker" else 100):
+            if "Medicine" in (actor.backpack or ()) and actor.health < full_health(actor) and (actor.health < full_health(actor) / 2
+                                                                                          or threat.damage_at(actor.pos) >= actor.health):
                 proposals.append(Candidate(f"heal:{actor.id}", self.id, frozenset({actor.id}), (Action(actor.id, "use", name="Medicine"),),
                                           Value(readiness=20 + context.risk(actor.pos)), "heal", ("low-health", "medicine-owned")))
             for building in world.our:
                 if not building.alive or building.level not in (1, 2):
                     continue
-                prefix = "Station" if building.kind == "station" else "Wall" if building.kind == "wall" else "Weapon" if building.kind in {"gatling", "railgun", "rocket"} else None
-                if prefix is None:
+                item = upgrade_item(building)
+                if item is None:
                     continue
-                item = f"{prefix}UpgradeVoucher{building.level}"
                 if item not in (actor.backpack or ()) or context.expired:
                     continue
                 action = Action(actor.id, "use", (building.pos,), item)
@@ -272,13 +279,50 @@ class UseInventory:
                 if step:
                     next_action, eta = step
                     proposals.append(Candidate(f"upgrade:{building.id}", self.id, frozenset({actor.id}), (next_action,),
-                                              Value(readiness=25 / eta, occupied_turns=eta, risk=context.risk(actor.pos)),
+                                              Value(readiness=upgrade_value(building), occupied_turns=eta, risk=context.risk(actor.pos)),
                                               "upgrade" if next_action.kind == "use" else "deliver-upgrade", ("voucher-owned", "level-observed"),
                                               frozenset({f"upgrade:{building.id}"})))
+            for wall in world.our:
+                maximum = full_health(wall)
+                if wall.kind != "wall" or not wall.alive or maximum is None or wall.health >= maximum / 2 or "WallFixer" not in (actor.backpack or ()):
+                    continue
+                step = approach_or_act(context, actor, wall.cells, Action(actor.id, "use", (wall.pos,), "WallFixer"))
+                if step:
+                    action, eta = step
+                    proposals.append(Candidate(f"repair:{wall.id}", self.id, frozenset({actor.id}), (action,),
+                                              Value(readiness=(maximum - wall.health) / 50, occupied_turns=eta),
+                                              "repair" if action.kind == "use" else "deliver-repair", ("damaged-wall", "repair-item-owned"),
+                                              frozenset({f"upgrade:{wall.id}"})))
+        return tuple(proposals)
+
+
+class EvadeLethalThreat:
+    id = "evade-lethal-threat"
+
+    def propose(self, context: Context) -> tuple[Candidate, ...]:
+        world, threat = context.world, ThreatEnvelope(context.world)
+        proposals = []
+        for actor in world.actors:
+            incoming = threat.damage_at(actor.pos)
+            if incoming < actor.health:
+                continue
+            blocked = world.blockers(exclude_actors=frozenset({actor.id}))
+            for target in actor.pos.neighbors():
+                if context.expired:
+                    break
+                if not world.inside(target) or target in blocked or threat.damage_at(target) >= incoming:
+                    continue
+                if world.phase_task and actor.kind == "pioneer" and target not in world.task_stay_cells(actor):
+                    continue
+                proposals.append(Candidate(f"evade:{actor.id}:{target.x}:{target.y}", self.id, frozenset({actor.id}),
+                                          (Action(actor.id, "move", (target,)),),
+                                          Value(readiness=1, risk=threat.damage_at(target) / max(1, actor.health)),
+                                          "evade", ("observed-health", "one-step-one-attack-envelope-unverified")))
         return tuple(proposals)
 
 
 def default_library() -> PlaybookLibrary:
     from .tasks import AcquireTask
 
-    return PlaybookLibrary((UseInventory(), OperateDefense(), BuildDefense(), AcquireTask(), CashInventory(), HarvestMinerals()))
+    return PlaybookLibrary((EvadeLethalThreat(), UseInventory(), OperateDefense(), BuildDefense(), AcquireTask(),
+                            RestockMedicine(), InvestUpgrades(), CashInventory(), HarvestMinerals()))

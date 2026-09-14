@@ -100,6 +100,7 @@ class RuleProfile:
     weapon_cost: int = 25
     inferred_build_rings: bool = True
     repeated_attack_targets: bool = False
+    guard_projected_role_deaths: bool = True
 
     def day(self, round_no: int) -> int:
         return (round_no - self.round_origin) // (self.day_length + self.night_length) + 1
@@ -194,6 +195,16 @@ class World:
         anchor = Pos.parse(task.get("taskPosition"))
         kind = next((zone.kind for zone in self.zones if zone.pos == anchor and zone.kind.startswith(self.side + "TaskPoint")), None)
         return frozenset(self.neutral(kind)) if kind else frozenset({anchor})
+
+    def task_stay_cells(self, actor: Unit) -> frozenset[Pos]:
+        """Safe task-preserving stands; ambiguous nearby points use intersection."""
+        possible = [self.task_cells(task) for task in self.observation.raw["teamOur"].get("playerTasks", [])]
+        possible = [cells for cells in possible if min(actor.pos.distance(cell) for cell in cells) == 1]
+        if not self.phase_task or actor.kind != "pioneer" or not possible:
+            return frozenset()
+        stands = [{cell for target in cells for cell in target.neighbors()
+                   if self.inside(cell) and cell not in cells} for cells in possible]
+        return frozenset(set.intersection(*stands))
 
     def blockers(self, *, exclude_actors: frozenset[str] = frozenset()) -> frozenset[Pos]:
         cells = {zone.pos for zone in self.zones}
