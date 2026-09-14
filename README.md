@@ -8,6 +8,7 @@
 
 - [分析文档索引](docs/analysis/README.md)
 - [自研框架方案](docs/analysis/architecture.md)
+- [机会识别与持续战术方案](docs/analysis/opportunity-playbooks.md)
 - [关键决策记录](docs/analysis/decisions.md)
 - [同伴分析评审与采纳记录](docs/analysis/peer-review.md)
 - [任务书](docs/任务书.md)与[接口文档](docs/接口文档.md)
