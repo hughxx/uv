@@ -20,6 +20,10 @@ logs/
 !.env.example
 !.env.sample
 
+# Personal working notes
+*.private.md
+*.private.txt
+
 # Operating-system metadata
 .DS_Store
 Thumbs.db

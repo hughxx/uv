@@ -1,6 +1,6 @@
-# 官方 demo 代码审查
+# 官方 demo 审查与验证
 
-更新：2026-09-14。对象为解包后的 `Demo/CoreGeek/`，原文件未修改。代码观察不等同于判题器行为；复现记录见 [verification.md](verification.md)。
+更新：2026-09-14。对象为解包后的 `Demo/CoreGeek/`，原文件未修改。代码观察不等同于判题器行为；复现方法和验证范围见§8–9。
 
 ## 1. 总评
 
@@ -8,7 +8,7 @@
 
 其架构瓶颈可以从代码直接解释：`Turn.load()` 丢掉任务、新闻、敌方和反馈信息，`decide()` 每轮从零运行昼夜分支，角色逐个生成动作。后续即使增加更聪明的选靶函数，也无法自动补上全队预算、持续任务、历史传闻、失败恢复和任务沙盒闭环。
 
-不支持“Python 太慢，所以必须换语言”的结论。本机样例 50 次决策中位数 1.751 ms、P95 2.304 ms；这只覆盖一个普通请求，既不是最坏情况性能保证，也没有提供整局胜率证据。
+现有测量不支持因性能原因必须更换Python的结论。样例 50 次决策中位数 1.751 ms、P95 2.304 ms；这只覆盖一个普通请求，既不是最坏情况性能保证，也没有提供整局胜率证据。
 
 ## 2. 优点：值得保留的设计原则
 
@@ -111,3 +111,126 @@
 ## 7. 重写取舍
 
 建议保留标准库优先、显式坐标、确定性、基础分层等原则。重新设计完整观测模型、跨回合状态、联合动作预算、任务状态机和协议编译层。原版 demo 保持原样作为基线对手和兼容性参考，不能担任规则裁判。
+
+## 8. 诊断与复现
+
+<a id="diagnostics"></a>
+
+诊断环境：Windows、Python 3.12.10。使用原版源码及样例，在内存构造输入；HTTP检查仅访问回环临时端口，未连接官方判题器。
+
+### 8.1 补充观察结果
+
+B01–B06的构造输入、实际结果和触发范围见§5；其余观测如下。
+
+| 检查 | 实际结果 | 能说明什么 |
+| --- | --- | --- |
+| 原始request送入decide | 3条move：10010→(6,22)，10011→(9,13)，10012→(9,17) | 样例可被demo处理；不证明对应行动在裁判里成功 |
+| `(10,24)`基地固定炮位 | (9,22),(9,23),(9,24) | 布局沿全局左侧成列 |
+| 固定墙位数及去重 | 19个、去重后19个 | 留门实现没有重复墙位，不能误报此处有重复计数bug |
+| 昼夜边界 | 0夜；1昼；70昼；71夜；130夜；131昼；200昼；201夜；1300夜 | demo采用1起算，不证明裁判也如此 |
+| response原样JSON解析 | 第66行第13列 `Expecting ',' delimiter` | 样例缺逗号，不能原样当fixture |
+| 仅在内存补逗号后保留重复键读取 | 17项、4个不同key；10010×10、10011×4、10012×2、10020×1 | 这是动作目录，标准dict会覆盖前项 |
+
+### 8.2 HTTP与耗时
+
+原版Handler通过 `127.0.0.1` 临时端口收到完整样例：HTTP 200，顶层只有 `roleCommandMap`，含3条指令。收到非法JSON `{`：HTTP 200，同样只有 `roleCommandMap`，值为空对象。
+
+此检查确认了本地异常兜底行为，没有验证裁判是否要求三个顶层字段、是否接受空动作或真实5秒预算内的最坏情况。
+
+对同一request连续运行50次 `decide()`，使用 `time.perf_counter()`：
+
+| 指标 | 测量值 |
+| --- | --- |
+| 中位数 | 1.751 ms |
+| P95，nearest rank，第48个排序样本 | 2.304 ms |
+| 最大 | 2.501 ms |
+
+这组数据不含网络传输、任务工具执行、全局搜索，也不是暖机／多地图严格性能基准。当前数据没有显示这个样例存在Python计算性能问题；不同机器复跑值可以不同。
+
+### 8.3 核心问题复现片段
+
+从仓库根目录运行以下PowerShell片段。它只加载原样例和demo，在内存构造输入并输出诊断，不修改文件；输出包含故意触发的错误示例。
+
+```powershell
+@'
+import sys, json
+sys.path.insert(0, 'Demo/CoreGeek/src')
+from agent.protocol import Turn, Pos
+from agent.brain import decide
+from agent.grid import next_step
+
+with open('docs/request.txt', encoding='utf-8-sig') as f:
+    sample = json.load(f)
+
+def unit(i, kind, x, y):
+    return dict(id=i, roleType=kind, pos=dict(x=x, y=y),
+                health=220 if kind == 'worker' else 1000,
+                level=1, backpack=[], backPackCapability=100)
+
+def request(roles, gold=75, round_no=1, robots=None, zones=None):
+    return dict(roundNo=round_no,
+                mapInfo=dict(width=41, height=32, zones=zones or []),
+                teamOur=dict(type='challenger', goldNum=gold, roles=roles),
+                teamEnemy=dict(roles=[]), robot=dict(roles=robots or []))
+
+t = Turn.load(sample)
+print('B01 enemy wall blocked:', Pos(28, 7) in t.blocked(t.workers()[0]))
+try:
+    next_step(t, t.workers()[0], t.workers()[0].pos)
+except KeyError as e:
+    print('B06 start=goal:', repr(e))
+
+base = unit(10013, 'station', 10, 24)
+roles = [base, unit(10010, 'worker', 8, 22), unit(10012, 'worker', 8, 23)]
+print('B02 gold=25:', decide(request(roles, gold=25)))
+
+roles += [unit(10020, 'gatling', 11, 25),
+          unit(10030, 'railgun', 12, 25), unit(10040, 'rocket', 12, 24)]
+print('B03 already 3 towers:', decide(request(roles, gold=25)))
+
+tower = unit(10020, 'gatling', 9, 23)
+tower.update(level=2, attackRange=5)
+robot = dict(id=30001, pos=dict(x=7, y=23), health=40,
+             roleType='smallRobot', targetTeam='challenger')
+print('B04 L2 targets:', decide(request(
+    [base, unit(10010, 'worker', 8, 23), tower],
+    round_no=71, robots=[robot])))
+
+worker = unit(10010, 'worker', 5, 5)
+worker['backpack'] = ['copper'] * 100
+print('B05 full backpack:', decide(request(
+    [base, worker], gold=0,
+    zones=[dict(neutralType='stone', pos=dict(x=4, y=5))])))
+
+robot['pos'] = dict(x=10, y=20)
+print('pairing, both could fire:', decide(request(
+    [base, unit(10010, 'worker', 12, 22), unit(10012, 'worker', 8, 22),
+     unit(10020, 'gatling', 9, 22), unit(10030, 'railgun', 12, 23)],
+    round_no=71, robots=[robot])))
+
+with open('docs/response.txt', encoding='utf-8-sig') as f:
+    raw = f.read()
+try:
+    json.loads(raw)
+except json.JSONDecodeError as e:
+    print('response syntax:', e.msg, 'line', e.lineno, 'column', e.colno)
+'@ | python -B -
+```
+
+这里的构造盘面用于验证函数对合法状态的健壮性，不声称它们都能沿原demo自身策略自然出现。尤其B03的非固定炮位、B04的升级塔、B05的满铜背包，需要其他策略或外部状态才能形成。
+
+## 9. 材料指纹与验证范围
+
+以下SHA256标识诊断依据；任务书为2026-09-14计分公式版本。
+
+| 文件 | SHA256 |
+| --- | --- |
+| Demo/CoreGeek.tar.gz | `BA391BD7CB67751722FF48F4B4B566427590E6E22E08A28269EEAE31A4533C7A` |
+| docs/任务书.md | `1676C370B9FC829892B315505CB67B8B4C6DC76A170434573AFD47F1E321D585` |
+| docs/接口文档.md | `931A65D09F881B30644225CA8D6B1BFBC7B2BEA7B4F6CE50D1F70CF858CB144D` |
+| docs/request.txt | `5FC36943CE3D7BBCA678B6342CD4A6C092D91AE8032E3107E8E840BA8CC88D82` |
+| docs/response.txt | `5DAF8278D7F097417B50082165A28DC4CE03163323730DC160EE4F7A534ED8D0` |
+
+解包源码与压缩包成员逐字节核对，7/7相同。任务计分算术校验见[策略定量比较](greedy-strategies.md)§3.3，分配成本算例见[中央计划器](architecture.md)§4。
+
+尚未运行官方判题器、完整1300回合对局、真实LLM任务、宝藏开启或策略胜率评测；未实测最优炮型、投资比例、机器人AI、跨武器弹道及任务速度奖励的实际结算。以上局部诊断不能作为规则已全部验证或新策略必胜的证据。
