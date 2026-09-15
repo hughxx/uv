@@ -72,6 +72,41 @@ class TelemetryTests(unittest.TestCase):
         app.handle_turn({"roundNo": 3})
         self.assertEqual(decision_outline(app), {"status": "probe", "revision": 1})
 
+    def test_defense_summary_distinguishes_operator_target_and_action_availability(self):
+        app = AgentApplication()
+        roles = [unit(pos=(4, 5)), unit(10030, "railgun", (3, 6)), unit(10020, "gatling", (6, 6))]
+        app.handle_turn(packet(roles, round_no=71, robots=[unit(30001, "largeRobot", (3, 10), health=500)]))
+        outline = decision_outline(app)
+        defense = {row["weapon"]: row for row in outline["defense"]}
+        self.assertEqual(defense["10030"]["adjacent"], ["10010"])
+        self.assertEqual(defense["10030"]["inRangeRobots"], 1)
+        self.assertGreater(defense["10030"]["offers"]["fire"], 0)
+        self.assertEqual(defense["10020"]["adjacent"], [])
+        self.assertEqual(defense["10020"]["offers"]["fire"], 0)
+        self.assertGreater(defense["10020"]["offers"]["approach"], 0)
+        self.assertEqual(outline["robotSnapshot"]["hostileLiving"], 1)
+        self.assertEqual(outline["robotSnapshot"]["nearest"][0]["pos"], [3, 10])
+        self.assertEqual(outline["staffing"]["shotsIssued"], 1)
+
+    def test_official_sample_keeps_input_decision_and_actions_within_event_limit(self):
+        app = AgentApplication()
+        raw = json.loads((Path(__file__).resolve().parents[1] / "docs" / "request.txt").read_text(encoding="utf-8-sig"))
+        response = app.handle_turn(raw)
+        encoded = event_text("turn", round=raw["roundNo"], input=input_outline(raw), decision=decision_outline(app), **response_outline(response))
+        event = json.loads(encoded)
+        self.assertLessEqual(len(encoded), MAX_EVENT_BYTES)
+        for key in ("input", "decision", "actions"):
+            self.assertIn(key, event)
+
+    def test_task_diagnostics_preserve_privacy_and_expose_budget(self):
+        app = AgentApplication()
+        app.handle_turn(packet([unit(10011, "pioneer")], phaseTask="PRIVATE_TASK"))
+        outline = decision_outline(app)
+        self.assertEqual(outline["task"]["requestsUsed"], 1)
+        self.assertEqual(outline["task"]["commandRequests"], 0)
+        self.assertEqual(outline["task"]["lastEvent"], "llm-requested")
+        self.assertNotIn("PRIVATE_TASK", json.dumps(outline))
+
     def test_queue_saturation_drops_without_blocking_and_reports_later(self):
         records = queue.Queue(maxsize=2)
         handler = NonBlockingHandler(records)

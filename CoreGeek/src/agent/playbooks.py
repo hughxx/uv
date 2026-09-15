@@ -180,6 +180,10 @@ def estimated_damage(world: World, weapon: Unit, targets: tuple[Pos, ...]) -> tu
 
 class OperateDefense:
     id = "operate-defense"
+    # One common readiness baseline for approaching, holding and firing.
+    # Arrival must not destroy the very value that paid for the approach.
+    # This is a heuristic positioning value, not score or predicted damage.
+    post_readiness = 18.0
 
     def propose(self, context: Context) -> tuple[Candidate, ...]:
         world = context.world
@@ -198,10 +202,19 @@ class OperateDefense:
                         continue
                     action = Action(actor.id, "move", (route.next_step,))
                     proposals.append(Candidate(f"defend:{weapon.id}", self.id, frozenset({actor.id}), (action,),
-                                              Value(readiness=18.0 / max(1, route.distance), risk=context.risk(route.next_step), occupied_turns=route.distance),
+                                              Value(readiness=self.post_readiness / max(1, route.distance), risk=context.risk(route.next_step), occupied_turns=route.distance),
                                               "approach-weapon", ("weapon-observed", "defense-deadline"), frozenset({f"weapon:{weapon.id}"})))
                     continue
-                if route.distance or not night or weapon.level not in (1, 2, 3):
+                if route.distance or not (night or context.rules.daylight_left(world.observation.round_no) <= 2):
+                    continue
+                # Holding reserves both this actor and this weapon in the
+                # joint plan, without inventing an unsupported HTTP idle action.
+                # It is an alternative, not a hard rule: healing, tasks, escape
+                # and a genuinely more valuable joint handover can still win.
+                proposals.append(Candidate(f"defend:{weapon.id}", self.id, frozenset({actor.id}), (),
+                                          Value(readiness=self.post_readiness, risk=context.risk(actor.pos)), "hold-weapon",
+                                          ("weapon-observed", "operator-positioned"), frozenset({f"weapon:{weapon.id}"})))
+                if not night or weapon.level not in (1, 2, 3):
                     continue
                 attack_range = weapon_range(weapon)
                 if attack_range is None or (weapon.kind == "rocket" and weapon.cooldown != 0):
@@ -219,7 +232,7 @@ class OperateDefense:
                     except InvalidAction:
                         continue
                     proposals.append(Candidate(f"defend:{weapon.id}", self.id, frozenset({actor.id}), (action,),
-                                              Value(), "fire", ("target-observed", "cooldown-ready", "estimated-ballistics"),
+                                              Value(readiness=self.post_readiness, risk=context.risk(actor.pos)), "fire", ("target-observed", "cooldown-ready", "estimated-ballistics"),
                                               frozenset({f"weapon:{weapon.id}"}), estimated_damage(world, weapon, tuple(group))))
         return tuple(proposals)
 

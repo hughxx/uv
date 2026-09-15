@@ -7,7 +7,8 @@ from unittest.mock import patch
 from tests.helpers import packet, unit, world
 from tests.test_package import find_bash
 from agent.application import AgentApplication
-from agent.tasks import parse_reply, prepare_task, sandbox_command
+from agent.strategy import StrategyEngine
+from agent.tasks import CommandAttempt, TaskState, parse_reply, prepare_task, record_command_result, sandbox_command, task_diagnostics
 
 
 def active(round_no=1, **changes):
@@ -101,3 +102,85 @@ class TaskTests(unittest.TestCase):
         response = AgentApplication().handle_turn(raw)
         self.assertEqual(response["roleCommandMap"]["10011"], {"action": "acceptTask"})
         self.assertFalse(response["prompt"] or response["executeCmd"])
+
+    def execute_cycle(self, app, response, round_no, command, output):
+        token = json.loads(response["prompt"])["requestId"]
+        requested = app.handle_turn(active(round_no, llmResp=json.dumps({"requestId": token, "kind": "execute", "command": command})))
+        self.assertTrue(requested["executeCmd"])
+        result = "[exitCode:0]\n" + app.engine.task_state.marker + "\n" + output
+        return app.handle_turn(active(round_no + 1, lastCmdResult=result))
+
+    def test_repeated_command_with_unchanged_result_is_blocked_but_new_command_is_allowed(self):
+        app = AgentApplication()
+        response = app.handle_turn(active())
+        for round_no in (2, 4):
+            response = self.execute_cycle(app, response, round_no, "echo PRIVATE_VALUE", "PRIVATE_VALUE")
+        token = json.loads(response["prompt"])["requestId"]
+        response = app.handle_turn(active(6, llmResp=json.dumps({"requestId": token, "kind": "execute", "command": "echo PRIVATE_VALUE"})))
+        self.assertFalse(response["executeCmd"])
+        self.assertTrue(response["prompt"])
+        diagnostic = task_diagnostics(app.engine.task_state)
+        self.assertEqual(diagnostic["lastEvent"], "repeated-command-blocked")
+        self.assertEqual((diagnostic["commandRequests"], diagnostic["commandId"], diagnostic["sameCommandExecutions"]), (2, 1, 2))
+        self.assertTrue(diagnostic["repeatedWithoutProgress"])
+        self.assertNotIn("PRIVATE_VALUE", json.dumps(diagnostic))
+        response = self.execute_cycle(app, response, 7, "echo changed", "changed")
+        self.assertEqual(task_diagnostics(app.engine.task_state)["commandId"], 2)
+
+    def test_same_command_with_changing_output_is_not_blocked(self):
+        app = AgentApplication()
+        response = app.handle_turn(active())
+        for round_no, output in ((2, "value1"), (4, "value2"), (6, "value3")):
+            response = self.execute_cycle(app, response, round_no, "inspect-progress", output)
+        self.assertFalse(task_diagnostics(app.engine.task_state)["repeatedWithoutProgress"])
+        self.assertEqual(len(app.engine.task_state.attempts), 3)
+
+    def test_same_length_different_commands_are_not_treated_as_repeats(self):
+        app = AgentApplication()
+        response = app.handle_turn(active())
+        for round_no, command in ((2, "echo a"), (4, "echo b"), (6, "echo c")):
+            response = self.execute_cycle(app, response, round_no, command, "same")
+        self.assertEqual(task_diagnostics(app.engine.task_state)["commandId"], 3)
+
+    def test_budget_reserves_final_llm_request_and_still_accepts_its_answer(self):
+        app = AgentApplication(StrategyEngine(task_max_requests=4))
+        response = self.execute_cycle(app, app.handle_turn(active()), 2, "echo 42", "42")
+        self.assertEqual(app.engine.task_state.step, 3)
+        token = json.loads(response["prompt"])["requestId"]
+        response = app.handle_turn(active(4, llmResp=json.dumps({"requestId": token, "kind": "execute", "command": "echo more"})))
+        self.assertFalse(response["executeCmd"])
+        self.assertTrue(response["prompt"])
+        self.assertEqual(app.engine.task_state.last_event, "answer-budget-reserved")
+        prompt = json.loads(response["prompt"])
+        self.assertFalse(prompt["commandAndFollowupAffordable"])
+        self.assertEqual(app.engine.task_state.step, 4)
+        response = app.handle_turn(active(5, llmResp=json.dumps({"requestId": prompt["requestId"], "kind": "answer", "answer": "42"})))
+        self.assertEqual(response["roleCommandMap"]["10011"]["taskAnswer"], "42")
+        self.assertEqual(app.engine.task_state.step, 4)
+        self.assertEqual(task_diagnostics(app.engine.task_state)["llmRequests"], 3)
+
+    def test_result_metadata_redacts_payload_and_distinguishes_failures(self):
+        state = TaskState("PRIVATE_TASK", 1, marker="private_marker", attempts=(CommandAttempt("private_hash", 8),))
+        for result, status, code, truncated in (("[exitCode:0]\nprivate_marker\nPRIVATE_OUTPUT", "exit", 0, False),
+                                                ("[exitCode:1]\nprivate_marker\nPRIVATE_ERROR\n[TRUNCATED]", "exit", 1, True),
+                                                ("[TIMEOUT]\nPRIVATE_PARTIAL", "timeout", None, False),
+                                                ("[JUDGER_ERROR]\nPRIVATE_DETAIL", "judger-error", None, False)):
+            with self.subTest(status=status, code=code):
+                updated = record_command_result(state, result)
+                metadata = task_diagnostics(updated)
+                self.assertEqual(metadata["result"]["status"], status)
+                self.assertEqual(metadata["result"]["exitCode"], code)
+                self.assertEqual(metadata["result"]["truncated"], truncated)
+                self.assertNotIn("PRIVATE_", json.dumps(metadata))
+                self.assertNotIn("private_", json.dumps(metadata))
+
+    def test_task_text_changes_and_reply_mismatch_are_visible(self):
+        app = AgentApplication()
+        app.handle_turn(active())
+        app.handle_turn(active(2, llmResp='{"requestId":"wrong","kind":"answer","answer":"private"}'))
+        self.assertEqual(task_diagnostics(app.engine.task_state)["replyStatus"], "request-id-mismatch")
+        raw = active(3)
+        raw["phaseTask"] = "Different private task"
+        app.handle_turn(raw)
+        diagnostic = task_diagnostics(app.engine.task_state)
+        self.assertEqual((diagnostic["started"], diagnostic["startReason"], diagnostic["requestsUsed"]), (3, "task-text-changed", 1))

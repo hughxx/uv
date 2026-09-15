@@ -10,6 +10,8 @@ if TYPE_CHECKING:
 
 
 def decision_report(application: AgentApplication) -> dict[str, Any]:
+    from .tasks import task_diagnostics
+
     report: dict[str, Any] = {
         "schema": "coregeek-decision-v1", "status": application.last_status,
         "revision": application.memory.revision,
@@ -49,6 +51,7 @@ def decision_report(application: AgentApplication) -> dict[str, Any]:
                      for candidate in plan.candidates],
         "tools": {"promptPresent": bool(decision.response["prompt"]), "commandPresent": bool(decision.response["executeCmd"]),
                   "phase": decision.task_state.phase if decision.task_state else "inactive",
-                  "requests": decision.task_state.step if decision.task_state else 0},
+                  "requests": decision.task_state.step if decision.task_state else 0,
+                  "diagnostics": task_diagnostics(decision.task_state) if decision.task_state else None},
     })
     return report

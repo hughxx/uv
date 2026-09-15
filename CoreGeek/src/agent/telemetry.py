@@ -197,6 +197,10 @@ def response_outline(response: dict[str, Any]) -> dict[str, Any]:
 
 
 def decision_outline(application: AgentApplication) -> dict[str, Any]:
+    from .actions import weapon_range
+    from .strategy_policy import DefensivePostPolicy
+    from .tasks import task_diagnostics
+
     result: dict[str, Any] = {"status": application.last_status, "revision": application.memory.revision}
     decision = application.engine.last_decision
     if application.last_status not in {"new", "new_session"} or decision is None:
@@ -221,10 +225,34 @@ def decision_outline(application: AgentApplication) -> dict[str, Any]:
         build_gates.append("no_free_build_site")
     feedback = world.observation.raw.get("lastRoundRoleActionResults", {})
     errors = world.observation.raw.get("errors", [])
+    hostile = [robot for robot in world.robots if robot.alive and robot.target_team in {None, world.side}]
+    station = world.station
+    distance_to_base = lambda robot: min(robot.pos.distance(cell) for cell in station.cells) if station else None
+    nearest = sorted(hostile, key=lambda robot: (distance_to_base(robot) if station else 0, robot.id))[:6]
+    moves = {action.actor_id: action.targets[0] for action in plan.actions if action.kind == "move"}
+    defense_offers = {identifier: {"approach": approach, "hold": hold, "fire": fire}
+                      for identifier, approach, hold, fire in decision.defense_offers}
+    defense = []
+    for weapon in world.weapons[:3]:
+        attack_range = weapon_range(weapon)
+        defense.append({"weapon": weapon.id, "kind": weapon.kind, "pos": [weapon.pos.x, weapon.pos.y],
+                        "level": weapon.level, "range": attack_range, "cooldown": weapon.cooldown,
+                        "adjacent": [actor.id for actor in world.actors if actor.pos.distance(weapon.pos) == 1],
+                        "nextAdjacent": [actor.id for actor in world.actors if moves.get(actor.id, actor.pos).distance(weapon.pos) == 1],
+                        "inRangeRobots": sum(0 < robot.pos.distance(weapon.pos) <= attack_range for robot in hostile) if attack_range is not None else None,
+                        "offers": defense_offers.get(weapon.id, {}),
+                        "selected": [[sorted(candidate.actors), candidate.stage] for candidate in plan.candidates if candidate.key == f"defend:{weapon.id}"]})
+    posts = DefensivePostPolicy(world, decision.rules)
     result.update({"day": decision.rules.day(world.observation.round_no), "daytime": decision.rules.daytime(world.observation.round_no),
                    "decisionMs": round(application.last_elapsed_seconds * 1000, 3), "utilityEstimate": plan.utility,
                    "projectedRoleLosses": plan.projected_role_losses, "threatenedPostsLost": plan.threatened_posts_lost,
                    "livingActors": len(world.actors), "weapons": len(world.weapons), "robots": len(world.robots),
+                   "robotSnapshot": {"hostileLiving": len(hostile), "kinds": dict(Counter(robot.kind for robot in hostile)),
+                                     "nearest": [{"id": robot.id, "kind": robot.kind, "pos": [robot.pos.x, robot.pos.y],
+                                                  "health": robot.health, "baseDistance": distance_to_base(robot),
+                                                  "state": robot.abnormal_state} for robot in nearest], "omitted": max(0, len(hostile) - len(nearest))},
+                   "defense": defense, "staffing": {"now": posts.staffed(()), "next": posts.staffed(plan.actions),
+                                                      "shotsIssued": sum(action.kind == "attack" for action in plan.actions)},
                    "candidates": decision.candidate_count, "offers": dict(decision.offers),
                    "buildCheck": {"gates": build_gates, "ringCells": len(build_cells), "freeSites": len(free_sites)},
                    "selected": [[candidate.definition, candidate.stage, sorted(candidate.actors)] for candidate in plan.candidates],
@@ -233,7 +261,8 @@ def decision_outline(application: AgentApplication) -> dict[str, Any]:
                    "diagnostics": decision.diagnostics,
                    "failedPreviousActions": [str(key) for key, value in feedback.items() if value is False] if isinstance(feedback, dict) else [],
                    "errorCodes": [error["errorCode"] for error in errors if isinstance(error, dict) and type(error.get("errorCode")) is int] if isinstance(errors, list) else [],
-                   "taskPhase": decision.task_state.phase if decision.task_state else "inactive"})
+                   "taskPhase": decision.task_state.phase if decision.task_state else "inactive",
+                   "task": task_diagnostics(decision.task_state) if decision.task_state else None})
     return result
 
 
