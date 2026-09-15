@@ -3,12 +3,14 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import queue
 import shutil
 import socket
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path, PurePosixPath
@@ -147,12 +149,45 @@ class PackageTests(unittest.TestCase):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
+        events: queue.Queue = queue.Queue()
+        stdout_lines, stderr_lines = [], []
+
+        def collect(stream, lines, *, parse_events=False):
+            for raw in iter(stream.readline, b""):
+                line = raw.decode("utf-8", errors="replace")
+                lines.append(line)
+                if parse_events and "{" in line:
+                    try:
+                        event = json.loads(line[line.index("{"):])
+                    except ValueError:
+                        continue
+                    if event.get("schema") == "coregeek-online-v1":
+                        events.put(event)
+
+        readers = [threading.Thread(target=collect, args=(process.stdout, stdout_lines), kwargs={"parse_events": True}, daemon=True),
+                   threading.Thread(target=collect, args=(process.stderr, stderr_lines), daemon=True)]
+        for reader in readers:
+            reader.start()
+
+        def wait_event(name, **matches):
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                try:
+                    event = events.get(timeout=max(0.001, deadline - time.monotonic()))
+                except queue.Empty:
+                    break
+                if event["event"] == name and all(event.get(key) == value for key, value in matches.items()):
+                    # Read the log while the server is still running: catches
+                    # wrong stream and pipe buffering, not just exit-time flush.
+                    self.assertIsNone(process.poll())
+                    return event
+            self.fail(f"missing stdout event {name} {matches}; stderr={''.join(stderr_lines)}; stdout={''.join(stdout_lines)}")
+
         try:
             deadline = time.monotonic() + 10
             while True:
                 if process.poll() is not None:
-                    _, error = process.communicate(timeout=2)
-                    self.fail(f"packaged process exited before startup: {error.decode(errors='replace')}")
+                    self.fail(f"packaged process exited before startup: {''.join(stderr_lines)}")
                 try:
                     with socket.create_connection(("127.0.0.1", port), timeout=0.2):
                         break
@@ -160,6 +195,9 @@ class PackageTests(unittest.TestCase):
                     if time.monotonic() >= deadline:
                         self.fail("packaged process did not start within 10 seconds")
                     time.sleep(0.05)
+            listening = wait_event("listening")
+            self.assertEqual(listening["logStream"], "stdout")
+            self.assertRegex(listening["build"], r"^[0-9a-f]{16}$")
             connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
             try:
                 connection.request("POST", "/", json.dumps({"roundNo": 1}), {"Content-Type": "application/json"})
@@ -168,6 +206,8 @@ class PackageTests(unittest.TestCase):
                 self.assertEqual(json.loads(response.read()), {"roleCommandMap": {}, "prompt": "", "executeCmd": ""})
             finally:
                 connection.close()
+            probe_log = wait_event("turn", status="probe")
+            self.assertEqual(probe_log["actionCount"], 0)
             def post(payload):
                 client = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
                 try:
@@ -187,13 +227,27 @@ class PackageTests(unittest.TestCase):
             expected = AgentApplication().handle_turn(sample)
             self.assertTrue(expected["roleCommandMap"])
             self.assertEqual(post(sample), expected)
+            turn = wait_event("turn", round=sample["roundNo"], status="new")
+            self.assertGreater(turn["actionCount"], 0)
+            self.assertTrue(turn["responseWritten"])
+            self.assertGreater(turn["decision"]["candidates"], 0)
+            self.assertIn("buildCheck", turn["decision"])
             self.assertEqual(post(sample), expected)
+            cached = wait_event("turn", status="cached")
+            self.assertNotIn("selected", cached["decision"])
 
-            task = packet([unit(10011, "pioneer", health=200)], phaseTask="Synthetic archive task: return 42.")
+            task = packet([unit(10011, "pioneer", health=200)], phaseTask="PRIVATE_ARCHIVE_TASK: return the requested text.")
             task_reply = post(task)
+            started = wait_event("turn", round=1, status="new_session")
+            self.assertGreater(started["promptChars"], 0)
             token = json.loads(task_reply["prompt"])["requestId"]
-            task.update(roundNo=2, llmResp=json.dumps({"requestId": token, "kind": "answer", "answer": "42"}))
-            self.assertEqual(post(task)["roleCommandMap"]["10011"], {"action": "submitAnswer", "taskAnswer": "42"})
+            answer = "PRIVATE_ARCHIVE_ANSWER"
+            task.update(roundNo=2, llmResp=json.dumps({"requestId": token, "kind": "answer", "answer": answer}))
+            self.assertEqual(post(task)["roleCommandMap"]["10011"], {"action": "submitAnswer", "taskAnswer": answer})
+            submitted = wait_event("turn", round=2)
+            self.assertEqual(submitted["actions"]["10011"], {"action": "submitAnswer", "taskAnswerChars": len(answer)})
+            self.assertNotIn("PRIVATE_ARCHIVE_", "".join(stdout_lines + stderr_lines))
+            self.assertNotIn("coregeek-online-v1", "".join(stderr_lines))
         finally:
             if shell and os.name == "nt" and process.poll() is None:
                 # Git Bash may retain a wrapper process on Windows. Stop only
@@ -204,12 +258,17 @@ class PackageTests(unittest.TestCase):
                     creationflags=subprocess.CREATE_NO_WINDOW,
                 )
             else:
-                process.terminate()
+                if process.poll() is None:
+                    process.terminate()
             try:
-                process.communicate(timeout=3)
+                process.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 process.kill()
-                process.communicate(timeout=3)
+                process.wait(timeout=3)
+            for reader in readers:
+                reader.join(timeout=2)
+            process.stdout.close()
+            process.stderr.close()
 
     def test_extracted_archive_starts_without_repository(self) -> None:
         self.assert_standalone_server(shell=False)

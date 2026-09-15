@@ -14,7 +14,7 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertFalse(args.disable_inferred_building or args.no_role_death_guard)
 
     def test_flags_reach_engine_without_changing_protocol(self):
-        with patch("agent.server.serve") as serve:
+        with patch("agent.server.serve") as serve, patch("agent.telemetry.configure_logging"):
             main(["9000", "--round-origin", "0", "--disable-inferred-building", "--no-role-death-guard",
                   "--no-threatened-post-guard", "--disable-joint-follow",
                   "--decision-budget-ms", "1000", "--task-max-requests", "20", "--tool-wait-rounds", "2"])

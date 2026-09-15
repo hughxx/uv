@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections import Counter
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -42,6 +43,7 @@ class Decision:
     observed_gold_delta: int | None
     task_state: TaskState | None = None
     failures: tuple[FailedAttempt, ...] = ()
+    offers: tuple[tuple[str, int], ...] = ()
 
 
 def objective_observed(run: PlaybookRun, world: World) -> bool:
@@ -90,6 +92,8 @@ class StrategyEngine:
                                  max_requests=self.task_max_requests, timeout_rounds=self.tool_wait_rounds)
         if task_work.candidate is not None:
             candidates += (task_work.candidate,)
+        offers = {definition.id: 0 for definition in self.library.definitions}
+        offers.update(Counter(candidate.definition for candidate in candidates))
         old = {} if reset else {run.candidate.key: run for run in self.runs}
         previous = {actor: key for key, run in old.items() for actor in run.candidate.actors}
         plan = PlanArbiter(compiler).choose(world, candidates, previous=previous, deadline=deadline)
@@ -111,7 +115,7 @@ class StrategyEngine:
         last_world = self.last_decision.world if self.last_decision and not reset else None
         delta = world.gold - last_world.gold if last_world and last_world.gold is not None and world.gold is not None else None
         return Decision(response, world, rules, plan, tuple(runs), tuple(transitions), diagnostics, len(candidates), delta,
-                        after_selection(task_work, plan.actions, world.observation.round_no), failures)
+                        after_selection(task_work, plan.actions, world.observation.round_no), failures, tuple(sorted(offers.items())))
 
     def commit(self, decision: Decision) -> None:
         self.rules, self.runs, self.last_decision = decision.rules, decision.runs, decision

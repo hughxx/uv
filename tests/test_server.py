@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import http.client
 import json
+import logging
+import logging.handlers
+import queue
 import sys
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "CoreGeek" / "src"))
 
@@ -17,6 +21,13 @@ from tests.helpers import packet
 
 class HTTPTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.logs = queue.Queue()
+        handler = logging.handlers.QueueHandler(self.logs)
+        logger = logging.getLogger("agent.server")
+        self.addCleanup(logger.setLevel, logger.level)
+        logger.setLevel(logging.INFO)
+        logger.addHandler(handler)
+        self.addCleanup(logger.removeHandler, handler)
         self.server = AgentHTTPServer(("127.0.0.1", 0))
         self.thread = threading.Thread(
             target=self.server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
@@ -37,6 +48,14 @@ class HTTPTests(unittest.TestCase):
             return response.status, json.loads(response.read())
         finally:
             connection.close()
+
+    def logged(self, name="turn") -> dict:
+        for _ in range(20):
+            record = self.logs.get(timeout=3)
+            event = json.loads(record.getMessage())
+            if event["event"] == name:
+                return event
+        self.fail(f"missing event: {name}")
 
     def test_valid_request(self) -> None:
         self.assertEqual(self.request(b'{"roundNo": 1}'), (200, idle_response()))
@@ -67,9 +86,12 @@ class HTTPTests(unittest.TestCase):
                 raise RuntimeError("not logged")
 
         self.server.application = FailingApplication()
-        with self.assertLogs("agent.server", level="ERROR") as captured:
-            self.assertEqual(self.request(json.dumps(packet()).encode()), (200, idle_response()))
-        self.assertNotIn("not logged", " ".join(captured.output))
+        self.assertEqual(self.request(json.dumps(packet()).encode()), (200, idle_response()))
+        event = self.logged()
+        self.assertEqual((event["http"], event["reason"], event["actionCount"]), (200, "decision_exception", 0))
+        self.assertEqual(event["error"]["type"], "RuntimeError")
+        self.assertTrue(event["error"]["frames"])
+        self.assertNotIn("not logged", json.dumps(event))
 
     def test_busy_application_has_bounded_wait(self) -> None:
         self.server.decision_lock.acquire()
@@ -85,8 +107,55 @@ class HTTPTests(unittest.TestCase):
                     return bad_response
 
             self.server.application = InvalidApplication()
-            with self.subTest(response=bad_response), self.assertLogs("agent.server", level="ERROR"):
+            with self.subTest(response=bad_response):
                 self.assertEqual(self.request(json.dumps(packet()).encode()), (200, idle_response()))
+                self.assertEqual(self.logged()["reason"], "decision_exception")
+
+    def test_request_and_turn_are_correlated_and_show_empty_reason(self) -> None:
+        self.assertEqual(self.request(json.dumps(packet([])).encode())[0], 200)
+        received = self.logged("request_received")
+        turn = self.logged()
+        self.assertEqual(received["id"], turn["id"])
+        self.assertEqual((turn["round"], turn["http"], turn["actionCount"]), (1, 200, 0))
+        self.assertEqual(turn["decision"]["emptyReason"], "no_living_actors")
+
+    def test_rejected_requests_have_reason_and_input_shape(self) -> None:
+        self.assertEqual(self.request(b'{"roundNo": true}')[0], 400)
+        event = self.logged()
+        self.assertEqual(event["reason"], "invalid_observation")
+        self.assertEqual(event["input"]["roundType"], "bool")
+        self.assertEqual(event["error"]["type"], "InvalidObservation")
+        self.assertEqual(self.request(b"PRIVATE_INVALID_JSON")[0], 400)
+        event = self.logged()
+        self.assertEqual(event["reason"], "invalid_json")
+        self.assertNotIn("PRIVATE_INVALID_JSON", json.dumps(event))
+
+    def test_game_shaped_probe_is_visibly_flagged(self) -> None:
+        self.assertEqual(self.request(b'{"roundNo": 1, "mapInfo": {}}')[0], 200)
+        event = self.logged()
+        self.assertEqual(event["status"], "probe")
+        self.assertEqual(event["reason"], "missing_game_fields_treated_as_probe")
+        self.assertIn("teamOur", event["input"]["missing"])
+
+    def test_unsupported_method_does_not_log_path_or_credentials(self) -> None:
+        client = http.client.HTTPConnection(*self.server.server_address, timeout=3)
+        try:
+            client.request("GET", "/PRIVATE_PATH?token=PRIVATE_QUERY", headers={"Authorization": "PRIVATE_AUTH"})
+            reply = client.getresponse()
+            self.assertEqual(reply.status, 501)
+            reply.read()
+        finally:
+            client.close()
+        event = self.logged("http_rejected")
+        self.assertEqual(event["method"], "GET")
+        self.assertNotIn("PRIVATE_", json.dumps(event))
+
+    def test_summary_failure_does_not_change_response(self) -> None:
+        with patch("agent.server.input_outline", side_effect=RuntimeError("PRIVATE_DETAIL")):
+            self.assertEqual(self.request(b'{"roundNo": 1}'), (200, idle_response()))
+            error = self.logged("telemetry_error")
+            self.assertNotIn("PRIVATE_DETAIL", json.dumps(error))
+            self.assertEqual(self.logged()["http"], 200)
 
 
 if __name__ == "__main__":

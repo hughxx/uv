@@ -48,18 +48,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+    from agent.telemetry import configure_logging, exception_location, log_event
 
-    from agent.server import serve
-    from agent.application import AgentApplication
-    from agent.strategy import StrategyEngine
-    from agent.world import RuleProfile
+    runtime_logging = configure_logging()
+    try:
+        from agent.server import serve
+        from agent.application import AgentApplication
+        from agent.strategy import StrategyEngine
+        from agent.world import RuleProfile
 
-    rules = RuleProfile(round_origin=args.round_origin, inferred_build_rings=not args.disable_inferred_building,
-                        guard_projected_role_deaths=not args.no_role_death_guard,
-                        preserve_threatened_posts=not args.no_threatened_post_guard, joint_follow_moves=not args.disable_joint_follow)
-    serve(args.port, AgentApplication(StrategyEngine(rules=rules, budget_seconds=args.decision_budget_ms / 1000,
-                                                     task_max_requests=args.task_max_requests, tool_wait_rounds=args.tool_wait_rounds)))
+        rules = RuleProfile(round_origin=args.round_origin, inferred_build_rings=not args.disable_inferred_building,
+                            guard_projected_role_deaths=not args.no_role_death_guard,
+                            preserve_threatened_posts=not args.no_threatened_post_guard, joint_follow_moves=not args.disable_joint_follow)
+        serve(args.port, AgentApplication(StrategyEngine(rules=rules, budget_seconds=args.decision_budget_ms / 1000,
+                                                         task_max_requests=args.task_max_requests, tool_wait_rounds=args.tool_wait_rounds)))
+    except Exception as error:
+        log_event(logging.getLogger("agent.server"), "fatal", level=logging.ERROR, error=exception_location(error))
+        raise SystemExit(1) from None
+    finally:
+        runtime_logging.close()
 
 
 if __name__ == "__main__":

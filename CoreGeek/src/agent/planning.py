@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import time
 import math
+from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Mapping
 
 from .actions import Action, ActionCompiler, InvalidAction, structured_action
@@ -53,6 +55,8 @@ class Plan:
     exhausted: bool = False
     projected_role_losses: int = 0
     threatened_posts_lost: int = 0
+    rejections: tuple[tuple[str, int], ...] = ()
+    empty_reason: str = ""
 
     @property
     def actions(self) -> tuple[Action, ...]:
@@ -128,6 +132,9 @@ class PlanArbiter:
         losses = lambda actions: threat.projected_losses(actions) if guard else 0
         valid = tuple(candidate for candidate in candidates if valid_candidate(candidate) and candidate.actors <= actor_ids
                       and (candidate.deadline is None or candidate.deadline >= world.observation.round_no))
+        rejections: Counter[str] = Counter()
+        if len(valid) != len(candidates):
+            rejections["invalid_or_expired_candidate"] = len(candidates) - len(valid)
         options: dict[str, list[Candidate]] = {}
         for actor_id in actor_ids:
             ranked = sorted((candidate for candidate in valid if actor_id in candidate.actors),
@@ -148,9 +155,10 @@ class PlanArbiter:
         best_value, visited, exhausted = 0.0, 0, False
         best_losses = losses(())
         best_posts_lost = 0
+        feasible_actions = 0
 
         def search(remaining: frozenset[str], chosen: tuple[Candidate, ...], resources: frozenset[str]) -> None:
-            nonlocal best, best_value, visited, exhausted, best_losses, best_posts_lost
+            nonlocal best, best_value, visited, exhausted, best_losses, best_posts_lost, feasible_actions
             if visited >= self.max_nodes or time.monotonic() >= deadline:
                 exhausted = True
                 return
@@ -159,24 +167,35 @@ class PlanArbiter:
                 actions = tuple(action for candidate in chosen for action in candidate.actions)
                 reserved_gold = sum(gold_commitment(world, candidate, self.compiler) for candidate in chosen)
                 if reserved_gold and (world.gold is None or reserved_gold > world.gold):
+                    rejections["shared_gold"] += 1
                     return
                 weapon_slots = sum(max(candidate.reserved_weapon_slots,
                                        sum(action.kind == "build" and action.name != "wall" for action in candidate.actions))
                                    for candidate in chosen)
                 if weapon_slots and weapon_slots + len(world.weapons) > self.compiler.rules.max_weapons:
+                    rejections["weapon_slots"] += 1
                     return
                 try:
                     self.compiler.validate(world, actions)
-                except InvalidAction:
+                except InvalidAction as error:
+                    frame = error.__traceback__
+                    while frame is not None and frame.tb_next is not None:
+                        frame = frame.tb_next
+                    site = f"{Path(frame.tb_frame.f_code.co_filename).name}:{frame.tb_lineno}" if frame else "unknown"
+                    rejections[f"action_validation@{site}"] += 1
                     return
                 if self.compiler.rules.preserve_build_access and not layout.preserves_access(actions, deadline):
+                    rejections["layout_or_deadline"] += 1
                     return
+                feasible_actions += int(bool(actions))
                 switching = sum(0.2 for candidate in chosen for actor in candidate.actors if actor in previous and previous[actor] != candidate.key)
                 utility = sum(candidate.value.utility for candidate in chosen) + combat_utility(world, chosen, robots=robots) - switching
                 projected = losses(actions)
                 posts_lost = posts.lost_posts(actions)
                 if (projected, posts_lost, -utility) < (best_losses, best_posts_lost, -best_value):
                     best, best_value, best_losses, best_posts_lost = chosen, utility, projected, posts_lost
+                elif actions:
+                    rejections["not_preferred_by_policy_or_utility"] += 1
                 return
             actor_id = min(remaining)
             for candidate in options[actor_id]:
@@ -185,4 +204,8 @@ class PlanArbiter:
             search(remaining - {actor_id}, chosen, resources)
 
         search(actor_ids, (), frozenset())
-        return Plan(best, best_value, visited, exhausted, best_losses, best_posts_lost)
+        empty = ""
+        if not any(candidate.actions for candidate in best):
+            empty = ("selected_hold" if best else "no_living_actors" if not actor_ids else "search_budget" if exhausted and not feasible_actions
+                     else "no_candidates" if not candidates else "no_feasible_action" if not feasible_actions else "wait_preferred")
+        return Plan(best, best_value, visited, exhausted, best_losses, best_posts_lost, tuple(sorted(rejections.items())), empty)
