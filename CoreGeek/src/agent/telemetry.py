@@ -47,6 +47,9 @@ class RuntimeLogging:
     def __init__(self) -> None:
         records: queue.Queue = queue.Queue(maxsize=256)
         self.handler = NonBlockingHandler(records)
+        # basicConfig otherwise assigns its default "LEVEL:logger:message"
+        # format to the queue handler, which is then formatted a second time.
+        self.handler.setFormatter(logging.Formatter("%(message)s"))
         output = logging.StreamHandler(sys.stdout)
         output.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
         self.listener = logging.handlers.QueueListener(records, output)

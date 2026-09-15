@@ -33,6 +33,7 @@ CoreGeek/                 自研运行工程，压缩包内同名顶层目录
     telemetry.py          有界异步stdout日志及在线白名单摘要
 scripts/package.py        标准库打包脚本
 scripts/replay.py         离线逐帧回放及预期响应对比
+scripts/log_triage.py     大日志清洗、总览及按回合分包取证
 tests/                    协议、策略、跨轮回放和独立包回归
 dist/CoreGeek.tar.gz      生成的提交包，不纳入Git
 docs/                     官方资料及技术文档
@@ -138,6 +139,33 @@ LLM与命令合计使用同一任务请求预算；发出命令前必须还能�
 排查对局时先保留从`listening`到失败回合的完整平台日志，放在Git忽略的`.local/`内；无需先取得完整请求JSON才能进行第一轮诊断。如果新包仍只有`listening`而没有`request_received`，优先检查平台调度／采集和包版本；仅出现请求到达而没有完成记录，则检查超时、进程终止及日志丢失。平台自己的`loop times`不直接当作游戏回合数。摘要不能代替完整输入重现决策，必要时再补受影响回合的原始请求。
 
 本地独立包测试分别捕捉stdout与stderr，在进程仍存活时验证日志可读，覆盖官方样例动作、缓存回合及构造任务提交；这不等于已通过网站日志采集验收。
+
+### 大日志的渐进式取证
+
+先保存原始平台日志，不需要人工补换行。每个在线事件本来就是一条长JSON；平台显示折行不影响提取。清洗工具兼容旧版`INFO | INFO:agent.server:`前缀、新版前缀、多行JSON、事件直接拼接及常见`message/log/content/text`字符串包装。新版运行入口消除了重复前缀，但分析旧日志不需要重跑游戏。
+
+工具只使用Python标准库，不联网、不调用LLM、不执行日志里的命令、不修改原日志。建议原日志与输出都放进Git忽略的`.local/`。第一步从仓库根目录运行：
+
+```sh
+python -B scripts/log_triage.py summary ".local/match.log" --out ".local/triage"
+```
+
+先只分享`.local/triage/overview.md`，最大16KiB。总览统计整份日志，区分到达／完成、重复／缓存／缺失回合、存活期闲置与无存活角色空等、守位与工具请求、逐炮攻击、任务阶段、失败反馈字段覆盖率，并给出建议细查的段号／回合／主题。往返、闲置等只是待核验信号，不直接宣称根因或胜负。
+
+完整清洗缓存`events.sqlite3`与分段统计`summary.json`保留在本地，不需要整包发送。若总览不足，再从缓存提取指定范围，例如：
+
+```sh
+python -B scripts/log_triage.py extract ".local/triage" --segment 1 --rounds 65:100 --focus defense --out ".local/defense-65-100"
+python -B scripts/log_triage.py extract ".local/triage" --segment 1 --rounds 10:27 --focus task --out ".local/task-10-27"
+```
+
+先分享输出目录里的`INDEX.md`，随后按需分享指定`part-001.jsonl`等文件。每包默认最多12KiB，可用`--part-kb 6`进一步缩小；每包都有logId、段号、版本和范围信息。`--focus`可选`defense`（防守）、`task`（任务）、`transport`（接口）或`all`（全部回合摘要字段）。接口主题还包含请求到达；不指定`--rounds`可以检查该段无法关联回合的启动／拒绝／致命错误。默认最多导出2000条匹配事件，剩余数量明确写入索引，可用`--limit`调整或缩小范围。
+
+输出目录必须是新目录，不覆盖已有结果；再次分析可改用`.local/triage-2`。编码默认识别UTF-8与带BOM的UTF-16，必要时显式加`--encoding gb18030`。自动方向按完成事件的请求ID升降趋势判断，倒序导出会逆序处理；混合拼接或特殊重试可能使判断不可靠，可加`--order forward`／`reverse`重新生成。启动、显式`new_session`及已观察到的阵营切换形成分析段；不凭回合号回退就推断换场，交错进程仍需人工核验。
+
+白名单清洗不保留任务原文、答案、提示、沙盒命令／输出正文、身份值、认证信息及原始路径。未知标签归为`unknown`或移除，摘要不是无损备份；原日志必须保留。扫描记录坏JSON、恢复的截断、未结束或超过256Ki字符的对象；运行日志中的`omittedFields`／丢弃计数也保留。分包遇到单条过大时用`fieldsRemovedForSize`标出被移除字段，并在索引统计，不能把缺字段当成零。仅有旧版demo的Python字典文本或未知格式时会报告未识别，不将其伪装成“没有动作”。
+
+退出码0为完成，1为没有匹配事件，2为输入／缓存／输出错误。需要完全重现策略时仍应使用原始游戏请求配合下面的离线回放；清洗无法补出旧日志没记录的机器人细节或任务内容。
 
 ## 离线回放
 

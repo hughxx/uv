@@ -257,6 +257,7 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(fired["decision"]["staffing"]["shotsIssued"], 1)
             self.assertNotIn("PRIVATE_ARCHIVE_", "".join(stdout_lines + stderr_lines))
             self.assertNotIn("coregeek-online-v1", "".join(stderr_lines))
+            self.assertNotIn("INFO:agent.server:", "".join(stdout_lines))
         finally:
             if shell and os.name == "nt" and process.poll() is None:
                 # Git Bash may retain a wrapper process on Windows. Stop only
