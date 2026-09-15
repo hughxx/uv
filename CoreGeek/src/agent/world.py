@@ -103,6 +103,7 @@ class RuleProfile:
     guard_projected_role_deaths: bool = True
     preserve_build_access: bool = True
     preserve_threatened_posts: bool = True
+    timely_defense_return: bool = True
     joint_follow_moves: bool = True
 
     def day(self, round_no: int) -> int:

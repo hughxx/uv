@@ -87,6 +87,10 @@ class TelemetryTests(unittest.TestCase):
         self.assertEqual(outline["robotSnapshot"]["hostileLiving"], 1)
         self.assertEqual(outline["robotSnapshot"]["nearest"][0]["pos"], [3, 10])
         self.assertEqual(outline["staffing"]["shotsIssued"], 1)
+        # Exercise the actual wire encoding, not only the pre-clipping outline.
+        wire = json.loads(event_text("turn", decision=outline))
+        encoded_defense = {row["weapon"]: row for row in wire["decision"]["defense"]}
+        self.assertEqual(encoded_defense["10030"]["selected"], [[["10010"], "fire"]])
 
     def test_official_sample_keeps_input_decision_and_actions_within_event_limit(self):
         app = AgentApplication()

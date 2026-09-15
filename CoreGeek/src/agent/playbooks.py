@@ -15,6 +15,7 @@ from .forecast import ThreatEnvelope, full_health
 from .geometry import Route, interaction_cells, shortest_route
 from .layout import FortifyBase
 from .planning import Candidate, Value, valid_candidate
+from .strategy_policy import ReturnCommitment
 from .world import MINERALS, Pos, RuleProfile, Unit, World
 
 
@@ -115,9 +116,11 @@ class CashInventory:
                 step = approach_or_act(context, actor, frozenset(world.neutral("vendor")), Action(actor.id, "sell", name=name, amount=amount))
                 if step:
                     action, eta = step
+                    stand = context.route(actor, frozenset(world.neutral("vendor"))).cells[-1]
                     proposals.append(Candidate(f"cash:{actor.id}:{name}", self.id, frozenset({actor.id}), (action,),
                                               Value(gold=amount * world.sale_prices[name], occupied_turns=eta, risk=context.risk(actor.pos)),
-                                              "sell" if action.kind == "sell" else "approach-vendor", ("inventory-observed", "sale-price-observed")))
+                                              "sell" if action.kind == "sell" else "approach-vendor", ("inventory-observed", "sale-price-observed"),
+                                              return_commitments=(ReturnCommitment(actor.id, stand, eta),)))
         return tuple(proposals)
 
 

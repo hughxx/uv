@@ -55,7 +55,10 @@ class StrategyTests(unittest.TestCase):
             self.fail("cash playbook did not reach a sale")
 
     def test_new_threat_replaces_cash_plan_and_hands_over_to_defense(self):
-        app = AgentApplication(StrategyEngine(library=PlaybookLibrary((CashInventory(), OperateDefense()))))
+        # Isolate reactive handover. The default anticipatory guard now holds
+        # this sole post before the robot arrives instead of starting the sale.
+        app = AgentApplication(StrategyEngine(library=PlaybookLibrary((CashInventory(), OperateDefense())),
+                                              rules=RuleProfile(timely_defense_return=False)))
         roles = [unit(backpack=["copper"] * 20), unit(10013, "station", (5, 6)), unit(10030, "railgun", (4, 6))]
         raw = packet(roles, round_no=71, robots=[unit(30001, "smallRobot", (4, 13), health=40)],
                      zones=[{"neutralType": "vendor", "pos": {"x": 12, "y": 10}}])

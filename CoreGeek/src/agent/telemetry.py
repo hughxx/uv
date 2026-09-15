@@ -92,7 +92,7 @@ def exception_location(error: BaseException) -> dict[str, Any]:
                        for frame in traceback.extract_tb(error.__traceback__)[-6:]]}
 
 
-def clipped(value: Any, depth: int = 6) -> Any:
+def clipped(value: Any, depth: int = 8) -> Any:
     if value is None or isinstance(value, bool):
         return value
     if type(value) in (int, float):
@@ -260,6 +260,7 @@ def decision_outline(application: AgentApplication) -> dict[str, Any]:
                    "buildCheck": {"gates": build_gates, "ringCells": len(build_cells), "freeSites": len(free_sites)},
                    "selected": [[candidate.definition, candidate.stage, sorted(candidate.actors)] for candidate in plan.candidates],
                    "search": {"visited": plan.visited, "exhausted": plan.exhausted, "rejections": dict(plan.rejections)},
+                   "returnCheck": asdict(plan.return_check),
                    "emptyReason": plan.empty_reason if not plan.actions else "",
                    "diagnostics": decision.diagnostics,
                    "failedPreviousActions": [str(key) for key, value in feedback.items() if value is False] if isinstance(feedback, dict) else [],

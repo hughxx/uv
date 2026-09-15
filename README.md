@@ -68,6 +68,7 @@ python CoreGeek/main3.py 9000
 | `--disable-inferred-building` | 关闭未证实的建造环推导，不再据此建塔／建墙 |
 | `--no-role-death-guard` | 关闭启发式角色死亡保护，保留动作合法性校验 |
 | `--no-threatened-post-guard` | 关闭近敌压力下的全队炮位保持策略 |
+| `--no-defense-return-guard` | 关闭按路径、卖矿后返程及团队分岗计算的回防期限策略 |
 | `--disable-joint-follow` | 禁止走入同伴本回合将腾出的格子，供移动结算校准 |
 | `--decision-budget-ms 50..3500` | 默认2500；合作式搜索预算，不是任意阻塞函数的硬超时 |
 | `--task-max-requests 1..100` | 默认12；单任务LLM与沙盒请求合计上限 |
@@ -125,10 +126,11 @@ LLM与命令合计使用同一任务请求预算；发出命令前必须还能�
 | `decision.offers`／`selected` | 各打法进入调度的候选数，以及实际选中的打法、阶段、角色 |
 | `decision.buildCheck` | 建造的基础门槛：昼夜、开关、存活工人／基地、金币、武器上限、空闲建造格；通过不等于路径与布局合格 |
 | `decision.defense`／`staffing` | 每座炮的位置、等级、射程、冷却、当前／移动后的邻接角色、射程内机器人数量、接近／守位／开火候选数和选中阶段；`staffing`按一人一炮匹配，站位人数不等于实际开火人数 |
+| `decision.returnCheck` | 回防策略状态、需安排的炮手数、当前动作后剩余机动轮数；`before`／`after`分别为原地等待与所选计划的`[不可匹配数, 超期路径步数之和]`。卖矿计入完成交易再返程；其他动作目前按下一站位估算。仅`status=ready`时评估有效，否则两组值为null；不是伤害或胜率预测 |
 | `decision.robotSnapshot` | 以攻击己方或目标未知的存活机器人为范围，记录种类计数与距基地最近6只的位置／血量／状态；`omitted`标记未展开数量，不是完整敌情回放 |
 | `decision.emptyReason`／`search.rejections` | 没有角色动作时区分无存活角色、无候选、未找到可行行动、预算耗尽或选择等待；拒绝数按搜索组合统计，不是每个打法的最终淘汰原因 |
 | `promptChars`／`executeCmdChars`／`taskAnswerChars` | 是否请求LLM、沙盒或提交答案；只记长度，不记内容。无角色动作但有工具请求不等于什么都没做 |
-| `decision.task` | 本地任务会话起点／重建原因、LLM／命令次数、回复关联状态、任务内命令序号／重复次数、结果退出码／超时／截断及止损事件；不输出命令内容或内容哈希 |
+| `decision.task` | 本地任务会话起点／重建原因、LLM／命令次数、回复关联状态、任务内命令序号／重复次数、结果退出码／超时／截断及止损事件；`result.markerSeen`确认是否看见包装器标记，`errorHints`仅提取白名单异常类名，不输出消息、路径、命令或内容哈希。空线索不表示成功，输出里的类名也不是根因证明 |
 | `failedPreviousActions`／`errorCodes` | 位于`decision`内，记录平台返回的上一轮失败角色及错误码；`responseWritten`仅表示写入连接，不能当作游戏执行成功 |
 | `http_rejected`／`telemetry_error`／`fatal` | 非法HTTP／不支持的方法、摘要生成异常、启动等致命异常；异常只记类型及文件名／行号／函数，不打印消息、源码行或绝对路径 |
 

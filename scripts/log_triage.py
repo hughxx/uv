@@ -112,7 +112,10 @@ TASK = {**{key: number for key in ("started", "requestsUsed", "llmRequests", "co
                              "llm-correlation-timeout", "command-correlation-timeout"}),
         "replyStatus": choice({"not-observed", "empty", "invalid-json", "not-object", "request-id-mismatch", "same-round", "matched-execute", "matched-answer", "matched-unknown-kind"}),
         "result": {"status": choice({"awaiting", "exit", "timeout", "judger-error", "unclassified", "uncorrelated-timeout"}),
-                   "exitCode": number, "truncated": boolean, "chars": number}}
+                   "exitCode": number, "truncated": boolean, "chars": number, "markerSeen": boolean,
+                   "errorHints": sequence(choice({"FileNotFoundError", "ModuleNotFoundError", "ImportError", "PermissionError", "SyntaxError",
+                                                  "IndentationError", "NameError", "TypeError", "ValueError", "KeyError", "IndexError",
+                                                  "AttributeError", "RuntimeError", "ZeroDivisionError"}), 4)}}
 INPUT = {"round": number, "roundType": TYPES, "keys": sequence(choice(FIELDS), 24), "missing": sequence(choice(FIELDS), 24),
          "map": {"width": number, "height": number, "zonesType": TYPES, "zoneCount": number},
          "our": {"side": choice({"challenger", "defender"}), "gold": number, "goldType": TYPES, "rolesType": TYPES, "roleCount": number,
@@ -131,9 +134,11 @@ DECISION = {**{key: number for key in ("revision", "day", "decisionMs", "utility
             "diagnostics": sequence(diagnostic), "failedPreviousActions": sequence(identifier), "errorCodes": sequence(number),
             "taskPhase": choice(PHASES), "task": TASK, "defense": sequence(DEFENSE, 3),
             "staffing": {"now": number, "next": number, "shotsIssued": number},
+            "returnCheck": {"status": choice({"not-applicable", "disabled", "ready", "budget", "size-limit"}), "required": number,
+                            "available_moves": number, "before": sequence(number, 2), "after": sequence(number, 2)},
             "robotSnapshot": {"hostileLiving": number, "kinds": mapping(lambda key: key if key in KINDS else None, number), "nearest": sequence(UNIT, 6), "omitted": number}}
 RULES = {**{key: number for key in ("round_origin", "day_length", "night_length", "max_weapons", "max_walls", "weapon_cost")},
-         **{key: boolean for key in ("inferred_build_rings", "repeated_attack_targets", "guard_projected_role_deaths", "preserve_build_access", "preserve_threatened_posts", "joint_follow_moves")}}
+         **{key: boolean for key in ("inferred_build_rings", "repeated_attack_targets", "guard_projected_role_deaths", "preserve_build_access", "preserve_threatened_posts", "timely_defense_return", "joint_follow_moves")}}
 EVENT_SPEC = {"event": choice(EVENTS), "id": identifier, "round": number, "http": number, "status": choice(STATUSES), "reason": choice(REASONS),
               "responseWritten": boolean, "elapsedMs": number, "actionCount": number, "promptChars": number, "executeCmdChars": number,
               "actions": mapping(identifier, ACTION, 8), "input": INPUT, "decision": DECISION,
@@ -387,7 +392,7 @@ def segment_summary(connection, segment, reason, config, direction):
         action_count = row.get("actionCount")
         tools_known = row.get("promptChars") is not None and row.get("executeCmdChars") is not None
         has_tools = bool(row.get("promptChars") or row.get("executeCmdChars"))
-        for key in ("selected", "offers", "robots", "robotSnapshot", "defense", "task", "failedPreviousActions", "errorCodes"):
+        for key in ("selected", "offers", "robots", "robotSnapshot", "defense", "returnCheck", "task", "failedPreviousActions", "errorCodes"):
             coverage[key] += key in decision and decision[key] is not None
         coverage["actions"] += "actions" in row and row["actions"] is not None
         coverage["ourUnits"] += "units" in our and our["units"] is not None
@@ -569,7 +574,7 @@ def focused(row, focus):
         return result
     result.update({key: row[key] for key in ("actionCount", "actions", "promptChars", "executeCmdChars") if key in row})
     common = {"day", "daytime", "livingActors", "selected", "offers", "emptyReason", "search", "diagnostics", "failedPreviousActions", "errorCodes"}
-    keys = common | ({"weapons", "robots", "robotSnapshot", "defense", "staffing", "buildCheck", "projectedRoleLosses", "threatenedPostsLost"} if focus == "defense" else {"taskPhase", "task"})
+    keys = common | ({"weapons", "robots", "robotSnapshot", "defense", "staffing", "returnCheck", "buildCheck", "projectedRoleLosses", "threatenedPostsLost"} if focus == "defense" else {"taskPhase", "task"})
     result["decision"] = {key: decision[key] for key in keys if key in decision}
     result["input"] = {key: inputs[key] for key in ({"our"} if focus == "defense" else {"our", "tasks", "tasksType", "phaseTask", "llmResp", "lastCmdResult"}) if key in inputs}
     return result

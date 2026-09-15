@@ -12,8 +12,8 @@ from typing import Mapping
 from .actions import Action, ActionCompiler, InvalidAction, structured_action
 from .forecast import ThreatEnvelope
 from .layout import LayoutGuard
-from .strategy_policy import DefensivePostPolicy
-from .world import Unit, World
+from .strategy_policy import DefenseReturnPolicy, DefensivePostPolicy, ReturnCheck, ReturnCommitment
+from .world import Pos, Unit, World
 
 
 @dataclass(frozen=True)
@@ -45,6 +45,7 @@ class Candidate:
     deadline: int | None = None
     reserved_gold: int = 0
     reserved_weapon_slots: int = 0
+    return_commitments: tuple[ReturnCommitment, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,7 @@ class Plan:
     threatened_posts_lost: int = 0
     rejections: tuple[tuple[str, int], ...] = ()
     empty_reason: str = ""
+    return_check: ReturnCheck = ReturnCheck()
 
     @property
     def actions(self) -> tuple[Action, ...]:
@@ -76,6 +78,11 @@ def valid_candidate(candidate: object) -> bool:
             and all(type(value) in (float, int) and math.isfinite(value) for value in numeric)
             and type(candidate.reserved_gold) is int and candidate.reserved_gold >= 0
             and type(candidate.reserved_weapon_slots) is int and candidate.reserved_weapon_slots >= 0
+            and isinstance(candidate.return_commitments, tuple)
+            and all(isinstance(c, ReturnCommitment) and c.actor_id in candidate.actors and isinstance(c.pos, Pos)
+                    and type(c.pos.x) is int and type(c.pos.y) is int and type(c.turns) is int and c.turns >= 1
+                    for c in candidate.return_commitments)
+            and len({c.actor_id for c in candidate.return_commitments}) == len(candidate.return_commitments)
             and (candidate.deadline is None or type(candidate.deadline) is int)
             and isinstance(candidate.actions, tuple)
             and all(structured_action(action) and action.actor_id in candidate.actors for action in candidate.actions)
@@ -128,6 +135,7 @@ class PlanArbiter:
         threat = ThreatEnvelope(world)
         layout = LayoutGuard(world)
         posts = DefensivePostPolicy(world, self.compiler.rules)
+        returning = DefenseReturnPolicy(world, self.compiler.rules, deadline=deadline)
         guard = self.compiler.rules.guard_projected_role_deaths
         losses = lambda actions: threat.projected_losses(actions) if guard else 0
         valid = tuple(candidate for candidate in candidates if valid_candidate(candidate) and candidate.actors <= actor_ids
@@ -138,7 +146,7 @@ class PlanArbiter:
         options: dict[str, list[Candidate]] = {}
         for actor_id in actor_ids:
             ranked = sorted((candidate for candidate in valid if actor_id in candidate.actors),
-                            key=lambda c: (losses(c.actions), posts.lost_posts(c.actions),
+                            key=lambda c: (losses(c.actions), posts.lost_posts(c.actions), returning.cost(c.actions, c.return_commitments),
                                            -(c.value.utility + combat_utility(world, (c,), robots=robots)), c.key))
             # Keep goal/resource diversity before filling alternate shot choices;
             # otherwise one weapon's many targets crowd every other weapon out.
@@ -155,10 +163,11 @@ class PlanArbiter:
         best_value, visited, exhausted = 0.0, 0, False
         best_losses = losses(())
         best_posts_lost = 0
+        best_return = returning.cost(())
         feasible_actions = 0
 
         def search(remaining: frozenset[str], chosen: tuple[Candidate, ...], resources: frozenset[str]) -> None:
-            nonlocal best, best_value, visited, exhausted, best_losses, best_posts_lost, feasible_actions
+            nonlocal best, best_value, visited, exhausted, best_losses, best_posts_lost, best_return, feasible_actions
             if visited >= self.max_nodes or time.monotonic() >= deadline:
                 exhausted = True
                 return
@@ -192,8 +201,11 @@ class PlanArbiter:
                 utility = sum(candidate.value.utility for candidate in chosen) + combat_utility(world, chosen, robots=robots) - switching
                 projected = losses(actions)
                 posts_lost = posts.lost_posts(actions)
-                if (projected, posts_lost, -utility) < (best_losses, best_posts_lost, -best_value):
+                commitments = tuple(c for candidate in chosen for c in candidate.return_commitments)
+                return_cost = returning.cost(actions, commitments)
+                if (projected, posts_lost, return_cost, -utility) < (best_losses, best_posts_lost, best_return, -best_value):
                     best, best_value, best_losses, best_posts_lost = chosen, utility, projected, posts_lost
+                    best_return = return_cost
                 elif actions:
                     rejections["not_preferred_by_policy_or_utility"] += 1
                 return
@@ -208,4 +220,6 @@ class PlanArbiter:
         if not any(candidate.actions for candidate in best):
             empty = ("selected_hold" if best else "no_living_actors" if not actor_ids else "search_budget" if exhausted and not feasible_actions
                      else "no_candidates" if not candidates else "no_feasible_action" if not feasible_actions else "wait_preferred")
-        return Plan(best, best_value, visited, exhausted, best_losses, best_posts_lost, tuple(sorted(rejections.items())), empty)
+        actions = tuple(action for candidate in best for action in candidate.actions)
+        return Plan(best, best_value, visited, exhausted, best_losses, best_posts_lost, tuple(sorted(rejections.items())), empty,
+                    returning.check(actions, tuple(c for candidate in best for c in candidate.return_commitments)))

@@ -61,6 +61,8 @@ class CommandAttempt:
     exit_code: int | None = None
     truncated: bool = False
     result_chars: int = 0
+    marker_seen: bool = False
+    error_hints: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -140,9 +142,15 @@ def record_command_result(state: TaskState, result: str) -> TaskState:
     # Correlation tokens change every execution even when the actual command
     # output does not. Exclude only that token from the equality comparison.
     normalized = result.replace(state.marker, "[correlation-marker]") if state.marker else result
+    # Fixed labels only. A printed exception-looking line is a hint, not proof
+    # of its cause; never emit its message, filename, source line or command.
+    allowed = {"FileNotFoundError", "ModuleNotFoundError", "ImportError", "PermissionError", "SyntaxError", "IndentationError",
+               "NameError", "TypeError", "ValueError", "KeyError", "IndexError", "AttributeError", "RuntimeError", "ZeroDivisionError"}
+    hints = tuple(sorted(set(re.findall(r"(?m)^([A-Za-z]+Error):", result)) & allowed))[:4]
     attempt = replace(state.attempts[-1], result_key=hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
                       result_status=status, exit_code=int(exit_match[1]) if exit_match else None,
-                      truncated=result.rstrip().endswith("[TRUNCATED]"), result_chars=len(result))
+                      truncated=result.rstrip().endswith("[TRUNCATED]"), result_chars=len(result),
+                      marker_seen=bool(state.marker and state.marker in result), error_hints=hints)
     return replace(state, attempts=(*state.attempts[:-1], attempt))
 
 
@@ -166,7 +174,8 @@ def task_diagnostics(state: TaskState) -> dict:
                       sameCommandExecutions=sum(attempt.key == latest.key for attempt in state.attempts),
                       repeatedWithoutProgress=repeated_without_progress(state, latest.key),
                       result={"status": latest.result_status, "exitCode": latest.exit_code,
-                              "truncated": latest.truncated, "chars": latest.result_chars})
+                              "truncated": latest.truncated, "chars": latest.result_chars,
+                              "markerSeen": latest.marker_seen, "errorHints": latest.error_hints})
     return result
 
 

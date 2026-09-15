@@ -27,6 +27,7 @@ def decision_report(application: AgentApplication) -> dict[str, Any]:
     report.update({
         "round": world.observation.round_no, "day": decision.rules.day(world.observation.round_no),
         "rules": asdict(decision.rules), "candidateCount": decision.candidate_count,
+        "returnCheck": asdict(plan.return_check),
         "search": {"visited": plan.visited, "exhausted": plan.exhausted, "rejections": dict(plan.rejections)},
         "offers": dict(decision.offers), "emptyReason": plan.empty_reason,
         "utilityEstimate": plan.utility, "projectedRoleLosses": plan.projected_role_losses,

@@ -38,6 +38,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--disable-inferred-building", action="store_true", help="disable the unverified 12/20-cell construction mask")
     parser.add_argument("--no-role-death-guard", action="store_true", help="disable the precautionary one-step robot threat guard")
     parser.add_argument("--no-threatened-post-guard", action="store_true", help="allow loss of staffed posts under nearby pressure")
+    parser.add_argument("--no-defense-return-guard", action="store_true", help="disable joint route-based return deadlines")
     parser.add_argument("--disable-joint-follow", action="store_true", help="forbid moves into teammates' currently occupied cells")
     parser.add_argument("--decision-budget-ms", type=bounded_integer(50, 3500), default=2500)
     parser.add_argument("--task-max-requests", type=bounded_integer(1, 100), default=12)
@@ -59,7 +60,8 @@ def main(argv: list[str] | None = None) -> None:
 
         rules = RuleProfile(round_origin=args.round_origin, inferred_build_rings=not args.disable_inferred_building,
                             guard_projected_role_deaths=not args.no_role_death_guard,
-                            preserve_threatened_posts=not args.no_threatened_post_guard, joint_follow_moves=not args.disable_joint_follow)
+                            preserve_threatened_posts=not args.no_threatened_post_guard, timely_defense_return=not args.no_defense_return_guard,
+                            joint_follow_moves=not args.disable_joint_follow)
         serve(args.port, AgentApplication(StrategyEngine(rules=rules, budget_seconds=args.decision_budget_ms / 1000,
                                                          task_max_requests=args.task_max_requests, tool_wait_rounds=args.tool_wait_rounds)))
     except Exception as error:

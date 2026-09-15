@@ -17,6 +17,18 @@ def active(round_no=1, **changes):
 
 
 class TaskTests(unittest.TestCase):
+    def test_command_error_hints_are_fixed_labels_not_exception_messages(self):
+        state = TaskState("PRIVATE_TASK", 1, marker="PRIVATE_MARKER", attempts=(CommandAttempt("PRIVATE_HASH", 21),))
+        raw = "[exitCode:1]\nPRIVATE_MARKER\nTraceback (most recent call last):\n  File /PRIVATE_PATH, line 1\nFileNotFoundError: PRIVATE_FILENAME\nPrivateCustomError: PRIVATE_SECRET"
+        metadata = task_diagnostics(record_command_result(state, raw))
+        self.assertEqual(metadata["result"]["errorHints"], ("FileNotFoundError",))
+        self.assertTrue(metadata["result"]["markerSeen"])
+        self.assertNotIn("PRIVATE", json.dumps(metadata))
+        self.assertNotIn("PrivateCustomError", json.dumps(metadata))
+        absent = task_diagnostics(record_command_result(state, "[exitCode:1]\nno classification available"))
+        self.assertEqual(absent["result"]["errorHints"], ())
+        self.assertFalse(absent["result"]["markerSeen"])
+
     def test_full_mock_tool_cycle_and_request_deduplication(self):
         app = AgentApplication()
         raw = active()

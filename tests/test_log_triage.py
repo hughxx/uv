@@ -36,6 +36,24 @@ def received(identifier):
 
 
 class LogTriageTests(unittest.TestCase):
+    def test_new_diagnostics_survive_wire_and_allowlisted_focus(self):
+        from agent.telemetry import event_text
+        from scripts.log_triage import focused
+
+        decision = {"returnCheck": {"status": "ready", "required": 2, "available_moves": 0, "before": [0, 14], "after": [0, 13]},
+                    "defense": [{"weapon": "10030", "selected": [[["10012"], "hold-weapon"]]}],
+                    "task": {"result": {"status": "exit", "exitCode": 1, "markerSeen": True,
+                                        "errorHints": ["FileNotFoundError", "PRIVATE_UNKNOWN"], "message": "PRIVATE_TEXT"}}}
+        wire = event_text("turn", id=71, round=71, decision=decision)
+        row = next(decode_events(wire, Counter()))
+        defense = focused(row, "defense")["decision"]
+        self.assertEqual(defense["defense"][0]["selected"], [[["10012"], "hold-weapon"]])
+        self.assertEqual(defense["returnCheck"], decision["returnCheck"])
+        task = focused(row, "task")["decision"]["task"]["result"]
+        self.assertEqual(task["errorHints"], ["FileNotFoundError", "unknown"])
+        self.assertTrue(task["markerSeen"])
+        self.assertNotIn("PRIVATE", json.dumps(row))
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="coregeek triage ")
         self.addCleanup(self.temporary.cleanup)
